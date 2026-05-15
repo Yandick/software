@@ -1,0 +1,35 @@
+{
+  "name": "ops-digital-employee-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter ops-employee-frontend build",
+    "dev": "pnpm --filter ops-employee-frontend dev",
+    "postinstall": "pnpm -r run stub --if-present",
+    "preview": "pnpm --filter ops-employee-frontend preview",
+    "typecheck": "pnpm --filter ops-employee-frontend typecheck"
+  },
+  "devDependencies": {
+    "@tsdown/css": "catalog:",
+    "@types/node": "catalog:",
+    "@vben/tailwind-config": "workspace:*",
+    "@vben/tsconfig": "workspace:*",
+    "@vben/vite-config": "workspace:*",
+    "@vitejs/plugin-vue": "catalog:",
+    "@vitejs/plugin-vue-jsx": "catalog:",
+    "sass-embedded": "catalog:",
+    "tailwindcss": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vue": "catalog:",
+    "vue-tsc": "catalog:"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.18.0 || ^24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.33.0"
+}
