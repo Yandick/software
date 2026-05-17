@@ -12,7 +12,11 @@ class KnowledgeCreate(BaseModel):
     content: str = Field(min_length=1)
     tags: str = ""
     source_type: str = "faq"
-    status: str = "published"
+    status: str = "pending_review"
+
+
+class KnowledgeStatusUpdate(BaseModel):
+    status: str = Field(min_length=1)
 
 
 class QuestionRequest(BaseModel):
@@ -25,6 +29,8 @@ class IssueCreate(BaseModel):
     description: str = Field(min_length=1)
     contact_phone: str = ""
     priority: str = "medium"
+    category: str = "general"
+    impact_scope: str = ""
 
 
 class IssueHandle(BaseModel):

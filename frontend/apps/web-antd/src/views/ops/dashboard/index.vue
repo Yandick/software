@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 
 import { message } from 'ant-design-vue';
 
-import { askQuestion, createIssue, getStats, suggestQuestions } from '#/api/ops';
+import { askQuestion, createIssue, getLlmStatus, getStats, suggestQuestions } from '#/api/ops';
 
 const question = ref('');
 const answer = ref('');
@@ -13,10 +13,17 @@ const modelStatus = ref('');
 const loading = ref(false);
 const creatingIssue = ref(false);
 const stats = ref<any>({});
+const llmStatus = ref<any>({});
 const suggestions = ref<any[]>([]);
 const suggestLoading = ref(false);
 const showSuggestions = ref(true);
 let suggestTimer: ReturnType<typeof setTimeout> | undefined;
+
+const llmModeText = computed(() => {
+  if (!llmStatus.value.employee_name) return '检测中';
+  if (llmStatus.value.ready) return `已接入本地 ${llmStatus.value.vllm_model_name}`;
+  return 'LLM 未就绪，请先启动 vLLM';
+});
 
 const guideSteps = [
   { title: '1. 先描述问题', text: '输入系统、账号、错误提示或现象；也可以直接点击推荐问题。' },
@@ -33,6 +40,14 @@ const quickActions = [
 
 const hasQuestion = computed(() => question.value.trim().length > 0);
 const visibleSuggestions = computed(() => suggestions.value.slice(0, 8));
+
+async function loadLlmStatus() {
+  try {
+    llmStatus.value = await getLlmStatus();
+  } catch {
+    llmStatus.value = {};
+  }
+}
 
 async function loadStats() {
   try {
@@ -79,6 +94,15 @@ async function ask() {
     references.value = result.references || [];
     needHuman.value = result.need_human;
     modelStatus.value = result.model_status;
+    if (result.employee) {
+      llmStatus.value = {
+        ...llmStatus.value,
+        mode: 'llm',
+        ready: true,
+        employee_name: result.employee.name,
+        employee_role: result.employee.role,
+      };
+    }
     await loadStats();
   } finally {
     loading.value = false;
@@ -120,7 +144,7 @@ watch(
 );
 
 onMounted(async () => {
-  await Promise.all([loadStats(), loadSuggestions('')]);
+  await Promise.all([loadStats(), loadLlmStatus(), loadSuggestions('')]);
 });
 </script>
 
@@ -130,6 +154,12 @@ onMounted(async () => {
       <div class="hero-grid">
         <section class="min-w-0">
           <div class="eyebrow mb-3">AI + RAG 运维申告门户</div>
+          <div class="mb-4 flex flex-wrap gap-2">
+            <a-tag color="cyan">{{ llmStatus.employee_name || '云维' }} · {{ llmStatus.employee_role || '企业运维数字员工' }}</a-tag>
+            <a-tag :color="llmStatus.ready ? 'green' : 'red'">
+              {{ llmModeText }}
+            </a-tag>
+          </div>
           <h1 class="mb-3 text-3xl font-semibold md:text-4xl">运维数字员工</h1>
           <p class="mb-5 max-w-3xl text-base leading-7 text-white/80">
             先自助查询，无法解决时转人工；账号操作、问题处理、回访和知识沉淀形成闭环。
@@ -229,6 +259,7 @@ onMounted(async () => {
         <a-tag :color="needHuman ? 'red' : 'green'">
           {{ needHuman ? '建议转人工' : '可自助处理' }}
         </a-tag>
+        <a-tag>员工模式：LLM 数字员工</a-tag>
         <a-tag>模型状态：{{ modelStatus }}</a-tag>
         <a-tag v-for="item in references" :key="item.id" color="blue">
           {{ item.title }} · {{ Math.round((item.score || 0) * 100) }}%

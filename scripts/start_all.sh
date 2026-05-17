@@ -14,51 +14,43 @@ VLLM_HOST="${OPS_VLLM_HOST:-127.0.0.1}"
 VLLM_PORT="${OPS_VLLM_PORT:-8000}"
 MODEL_PATH="${OPS_MODEL_PATH:-models/qwen3-1.7b}"
 SERVED_MODEL_NAME="${OPS_VLLM_MODEL_NAME:-qwen3-1.7b}"
-CONDA_ENV="${OPS_CONDA_ENV:-${CONDA_DEFAULT_ENV:-}}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 PNPM_VERSION="${PNPM_VERSION:-10.33.0}"
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 
-START_LLM=1
 START_FRONTEND=1
 INSTALL_FRONTEND=0
-STRICT_LLM=1
 VLLM_TIMEOUT="${VLLM_TIMEOUT:-420}"
 BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-90}"
 VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-40960}"
 
 usage() {
-  cat <<EOF
+  cat <<USAGE
 Usage: scripts/start_all.sh [options]
 
 Options:
-  --no-llm              不启动 vLLM，后端使用 OPS_INFERENCE_BACKEND=retrieval，适合快速业务测试
   --no-frontend         只启动 vLLM + 后端
   --install-frontend    启动前执行 pnpm install
-  --allow-no-llm        vLLM 启动失败时不中断，后端自动使用 retrieval 兜底
   --cuda-devices VALUE  设置 CUDA_VISIBLE_DEVICES，例如 0、1、0,1；默认 0
   -h, --help            显示帮助
 
 Env:
-  OPS_CONDA_ENV         指定 Python conda 环境；默认使用当前 CONDA_DEFAULT_ENV，未设置则直接用 python
   BACKEND_PORT          后端端口，默认 8010
   FRONTEND_PORT         前端端口，默认 5666
-  CUDA_VISIBLE_DEVICES  指定可见 GPU；脚本默认设为 0，建议使用者显式设置
+  CUDA_VISIBLE_DEVICES  指定可见 GPU；脚本默认设为 0
   OPS_MODEL_PATH        模型路径，默认 models/qwen3-1.7b
   OPS_VLLM_MODEL_NAME   vLLM served model name，默认 qwen3-1.7b
   VLLM_TIMEOUT          等待 vLLM 秒数，默认 420
   VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率，默认 0.90
-  VLLM_MAX_MODEL_LEN   vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
-EOF
+  VLLM_MAX_MODEL_LEN    vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
+USAGE
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --no-llm) START_LLM=0; STRICT_LLM=0 ;;
     --no-frontend) START_FRONTEND=0 ;;
     --install-frontend) INSTALL_FRONTEND=1 ;;
-    --allow-no-llm) STRICT_LLM=0 ;;
     --cuda-devices)
       shift
       if [[ $# -eq 0 ]]; then echo "--cuda-devices requires a value"; exit 2; fi
@@ -71,14 +63,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
-
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-python_cmd() {
-  if [[ -n "$CONDA_ENV" ]] && have_cmd conda; then
-    conda run -n "$CONDA_ENV" "$PYTHON_BIN" "$@"
-  else
-    "$PYTHON_BIN" "$@"
+require_cmd() {
+  if ! have_cmd "$1"; then
+    log "缺少命令：$1。请先激活项目 conda 环境并安装依赖。"
+    exit 1
   fi
 }
 
@@ -86,11 +76,7 @@ run_python_bg() {
   local name="$1"; shift
   local quoted_args
   printf -v quoted_args ' %q' "$@"
-  if [[ -n "$CONDA_ENV" ]] && have_cmd conda; then
-    setsid bash -c "cd '$ROOT_DIR' && exec conda run --no-capture-output -n '$CONDA_ENV' '$PYTHON_BIN'$quoted_args" >"$LOG_DIR/$name.log" 2>&1 &
-  else
-    setsid bash -c "cd '$ROOT_DIR' && exec '$PYTHON_BIN'$quoted_args" >"$LOG_DIR/$name.log" 2>&1 &
-  fi
+  setsid bash -c "cd '$ROOT_DIR' && exec '$PYTHON_BIN'$quoted_args" >"$LOG_DIR/$name.log" 2>&1 &
   echo $! >"$RUN_DIR/$name.pid"
   log "$name started, pid=$(cat "$RUN_DIR/$name.pid"), log=logs/$name.log"
 }
@@ -102,7 +88,6 @@ stop_pid_file() {
   fi
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    # Services are started with setsid; stop the whole session/process group.
     pkill -TERM -s "$pid" >/dev/null 2>&1 || true
     kill -- "-$pid" >/dev/null 2>&1 || kill "$pid" >/dev/null 2>&1 || true
     sleep 1
@@ -112,18 +97,32 @@ stop_pid_file() {
 }
 
 pnpm_cmd() {
-  if [[ -n "${PNPM_CMD:-}" ]]; then
-    "$PNPM_CMD" "$@"
-  elif have_cmd pnpm; then
+  if have_cmd pnpm; then
     pnpm "$@"
   elif have_cmd corepack; then
     corepack pnpm "$@"
   elif have_cmd npm; then
     npm exec --yes "pnpm@$PNPM_VERSION" -- "$@"
   else
-    log "pnpm/corepack/npm 都不可用，无法启动前端"
+    log "缺少 pnpm/corepack/npm。请先在当前环境安装 Node.js 和 pnpm。"
     return 127
   fi
+}
+
+pnpm_start_command() {
+  local cmd args
+  args=(--filter ops-employee-frontend dev --host "$FRONTEND_HOST" --port "$FRONTEND_PORT")
+  if have_cmd pnpm; then
+    cmd=("$(command -v pnpm)" "${args[@]}")
+  elif have_cmd corepack; then
+    cmd=("$(command -v corepack)" pnpm "${args[@]}")
+  elif have_cmd npm; then
+    cmd=("$(command -v npm)" exec --yes "pnpm@$PNPM_VERSION" -- "${args[@]}")
+  else
+    log "缺少 pnpm/corepack/npm。请先在当前环境安装 Node.js 和 pnpm。"
+    return 127
+  fi
+  printf '%q ' "${cmd[@]}"
 }
 
 CLEANED_UP=0
@@ -180,9 +179,6 @@ first_cuda_device() {
 }
 
 check_gpu_memory() {
-  if [[ "$START_LLM" != 1 ]]; then
-    return 0
-  fi
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     log "nvidia-smi 不可用，跳过显存预检查。"
     return 0
@@ -200,7 +196,7 @@ check_gpu_memory() {
     exit 1
   fi
   IFS=', ' read -r _ total_mib used_mib free_mib <<<"$line"
-  required_mib="$(python - <<PY2
+  required_mib="$($PYTHON_BIN - <<PY2
 print(int(float('$total_mib') * float('$VLLM_GPU_MEMORY_UTILIZATION')))
 PY2
 )"
@@ -216,48 +212,43 @@ PY2
 cd "$ROOT_DIR"
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 export OPS_CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+
+require_cmd "$PYTHON_BIN"
+require_cmd curl
+if [[ "$START_FRONTEND" == 1 ]]; then
+  require_cmd node
+  if ! have_cmd pnpm && ! have_cmd corepack && ! have_cmd npm; then
+    log "缺少 pnpm/corepack/npm。请先安装前端依赖工具。"
+    exit 1
+  fi
+fi
+
 log "project root: $ROOT_DIR"
-log "python env: ${CONDA_ENV:-direct python}"
+log "python: $(command -v "$PYTHON_BIN")"
+log "node: $([[ "$START_FRONTEND" == 1 ]] && command -v node || echo 'not required')"
 log "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 log "vLLM memory config: gpu_memory_utilization=$VLLM_GPU_MEMORY_UTILIZATION, max_model_len=$VLLM_MAX_MODEL_LEN"
+
 check_port_free "$BACKEND_PORT" backend
 if [[ "$START_FRONTEND" == 1 ]]; then check_port_free "$FRONTEND_PORT" frontend; fi
-if [[ "$START_LLM" == 1 ]]; then check_port_free "$VLLM_PORT" vLLM; fi
+check_port_free "$VLLM_PORT" vLLM
 check_gpu_memory
 
-if [[ "$START_LLM" == 1 ]]; then
-  log "starting vLLM for Qwen3: $MODEL_PATH"
-  run_python_bg vllm -m vllm.entrypoints.openai.api_server \
-    --model "$MODEL_PATH" \
-    --served-model-name "$SERVED_MODEL_NAME" \
-    --host "$VLLM_HOST" \
-    --port "$VLLM_PORT" \
-    --reasoning-parser deepseek_r1 \
-    --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
-    --max-model-len "$VLLM_MAX_MODEL_LEN"
-  if wait_http "http://$VLLM_HOST:$VLLM_PORT/v1/models" "$VLLM_TIMEOUT" vllm "$RUN_DIR/vllm.pid"; then
-    export OPS_INFERENCE_BACKEND="${OPS_INFERENCE_BACKEND:-vllm}"
-    export OPS_VLLM_BASE_URL="http://$VLLM_HOST:$VLLM_PORT/v1"
-    export OPS_VLLM_MODEL_NAME="$SERVED_MODEL_NAME"
-  elif [[ "$STRICT_LLM" == 1 ]]; then
-    log "vLLM 启动失败，查看 logs/vllm.log。可用 --allow-no-llm 或 --no-llm 进行纯业务测试。"
-    exit 1
-  else
-    log "vLLM 不可用，后端切换为 retrieval 兜底模式。"
-    if [[ -f "$RUN_DIR/vllm.pid" ]]; then
-      vllm_pid="$(cat "$RUN_DIR/vllm.pid" 2>/dev/null || true)"
-      if [[ -n "$vllm_pid" ]] && kill -0 "$vllm_pid" >/dev/null 2>&1; then
-        pkill -TERM -s "$vllm_pid" >/dev/null 2>&1 || true
-        kill -- "-$vllm_pid" >/dev/null 2>&1 || kill "$vllm_pid" >/dev/null 2>&1 || true
-      fi
-      rm -f "$RUN_DIR/vllm.pid"
-    fi
-    START_LLM=0
-    export OPS_INFERENCE_BACKEND="retrieval"
-  fi
+log "starting vLLM for Qwen3: $MODEL_PATH"
+run_python_bg vllm -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL_PATH" \
+  --served-model-name "$SERVED_MODEL_NAME" \
+  --host "$VLLM_HOST" \
+  --port "$VLLM_PORT" \
+  --reasoning-parser deepseek_r1 \
+  --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
+  --max-model-len "$VLLM_MAX_MODEL_LEN"
+if wait_http "http://$VLLM_HOST:$VLLM_PORT/v1/models" "$VLLM_TIMEOUT" vllm "$RUN_DIR/vllm.pid"; then
+  export OPS_VLLM_BASE_URL="http://$VLLM_HOST:$VLLM_PORT/v1"
+  export OPS_VLLM_MODEL_NAME="$SERVED_MODEL_NAME"
 else
-  export OPS_INFERENCE_BACKEND="retrieval"
-  log "skip vLLM; backend inference mode: retrieval"
+  log "vLLM 启动失败，数字员工不可用。请查看 logs/vllm.log 后重新启动。"
+  exit 1
 fi
 
 log "starting backend: http://$BACKEND_HOST:$BACKEND_PORT"
@@ -270,32 +261,33 @@ if [[ "$START_FRONTEND" == 1 ]]; then
     (cd "$ROOT_DIR/frontend" && pnpm_cmd install) 2>&1 | tee "$LOG_DIR/frontend-install.log"
   fi
   log "starting frontend: http://$FRONTEND_HOST:$FRONTEND_PORT"
-  setsid bash -c "cd '$ROOT_DIR/frontend' && $(declare -f pnpm_cmd have_cmd log); pnpm_cmd --filter ops-employee-frontend dev --host '$FRONTEND_HOST' --port '$FRONTEND_PORT'" >"$LOG_DIR/frontend.log" 2>&1 &
+  if ! frontend_cmd="$(pnpm_start_command)"; then
+    log "前端启动命令解析失败。"
+    exit 1
+  fi
+  setsid bash -c "cd '$ROOT_DIR/frontend' && exec $frontend_cmd" >"$LOG_DIR/frontend.log" 2>&1 &
   echo $! >"$RUN_DIR/frontend.pid"
   log "frontend started, pid=$(cat "$RUN_DIR/frontend.pid"), log=logs/frontend.log"
 fi
 
-cat <<EOF
+cat <<DONE
 
 启动完成：
 - 后端:   http://$BACKEND_HOST:$BACKEND_PORT/api/health
 - 前端:   $([[ "$START_FRONTEND" == 1 ]] && echo "http://$FRONTEND_HOST:$FRONTEND_PORT" || echo "未启动")
-- vLLM:   $([[ "$START_LLM" == 1 ]] && echo "http://$VLLM_HOST:$VLLM_PORT/v1/models" || echo "未启动，后端 retrieval 模式")
+- vLLM:   http://$VLLM_HOST:$VLLM_PORT/v1/models
 - 日志:   $LOG_DIR
 
 按 Ctrl+C 会停止本脚本启动的服务。
-EOF
+DONE
 
 while true; do
   sleep 3
-  for name in backend; do
-    pid_file="$RUN_DIR/$name.pid"
-    if [[ -f "$pid_file" ]] && ! kill -0 "$(cat "$pid_file")" >/dev/null 2>&1; then
-      log "$name exited unexpectedly. 查看 logs/$name.log"
-      exit 1
-    fi
-  done
-  if [[ "$START_LLM" == 1 && -f "$RUN_DIR/vllm.pid" ]] && ! kill -0 "$(cat "$RUN_DIR/vllm.pid")" >/dev/null 2>&1; then
+  if [[ -f "$RUN_DIR/backend.pid" ]] && ! kill -0 "$(cat "$RUN_DIR/backend.pid")" >/dev/null 2>&1; then
+    log "backend exited unexpectedly. 查看 logs/backend.log"
+    exit 1
+  fi
+  if [[ -f "$RUN_DIR/vllm.pid" ]] && ! kill -0 "$(cat "$RUN_DIR/vllm.pid")" >/dev/null 2>&1; then
     log "vLLM exited unexpectedly. 查看 logs/vllm.log"
     exit 1
   fi

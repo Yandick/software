@@ -100,8 +100,39 @@ def init_db() -> None:
           created_at text not null
         );
         """)
+        ensure_issue_columns(conn)
+        ensure_issue_events(conn)
         seed_users(conn)
         seed_knowledge(conn)
+
+
+def ensure_issue_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(issues)").fetchall()}
+    columns = {
+        "created_by": "integer",
+        "requester_name": "text not null default ''",
+        "category": "text not null default 'general'",
+        "impact_scope": "text not null default ''",
+        "handled_by": "integer",
+        "visited_by": "integer",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table issues add column {name} {definition}")
+
+
+def ensure_issue_events(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+    create table if not exists issue_events (
+      id integer primary key autoincrement,
+      issue_id integer not null,
+      event_type text not null,
+      operator_id integer,
+      operator_name text not null default '',
+      content text not null,
+      created_at text not null
+    );
+    """)
 
 
 def seed_users(conn: sqlite3.Connection) -> None:
@@ -143,3 +174,16 @@ def audit(event_type: str, target_type: str, content: str, target_id: int | None
             "insert into audit_logs(event_type,target_type,target_id,content,created_at) values(?,?,?,?,?)",
             (event_type, target_type, target_id, content, utc_now()),
         )
+
+
+def issue_event(
+    conn: sqlite3.Connection,
+    issue_id: int,
+    event_type: str,
+    operator: dict[str, Any],
+    content: str,
+) -> None:
+    conn.execute(
+        "insert into issue_events(issue_id,event_type,operator_id,operator_name,content,created_at) values(?,?,?,?,?,?)",
+        (issue_id, event_type, operator.get("id"), operator.get("real_name", ""), content, utc_now()),
+    )

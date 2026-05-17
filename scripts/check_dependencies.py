@@ -11,16 +11,14 @@ REQUIRED = {
     "pydantic-settings": "pydantic_settings",
     "PyJWT": "jwt",
     "httpx": "httpx",
-    "scikit-learn": "sklearn",
-    "transformers": "transformers",
     "torch": "torch",
+    "transformers": "transformers",
     "vllm": "vllm",
+    "qwen-agent": "qwen_agent",
+    "soundfile": "soundfile",
 }
 
-OPTIONAL = {
-    "qwen-agent": "qwen_agent",
-    "sentence-transformers": "sentence_transformers",
-}
+OPTIONAL = {}
 
 
 def version(pkg: str) -> str:

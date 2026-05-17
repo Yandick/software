@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,36 +72,25 @@ class RagService:
 
     def _score(self, question: str, items: list[dict[str, Any]]) -> list[float]:
         corpus = [f"{item['title']} {item['tags']} {item['content']}" for item in items]
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
+        q_terms = self._tokenize(question)
+        scores: list[float] = []
+        for doc in corpus:
+            d_terms = self._tokenize(doc)
+            overlap = q_terms & d_terms
+            scores.append(len(overlap) / max(len(q_terms), 1))
+        return scores
 
-            vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), lowercase=False)
-            matrix = vectorizer.fit_transform([question, *corpus])
-            return cosine_similarity(matrix[0:1], matrix[1:]).flatten().tolist()
-        except Exception:
-            q_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", question.lower()))
-            scores: list[float] = []
-            for doc in corpus:
-                d_terms = set(re.findall(r"[\w\u4e00-\u9fff]+", doc.lower()))
-                scores.append(len(q_terms & d_terms) / max(len(q_terms), 1))
-            return scores
+    def _tokenize(self, text: str) -> set[str]:
+        chars = [char.lower() for char in text if char.strip()]
+        grams = set(chars)
+        grams.update("".join(chars[index : index + 2]) for index in range(max(len(chars) - 1, 0)))
+        return grams
 
     def build_context(self, references: list[dict[str, Any]]) -> str:
         blocks = []
         for idx, item in enumerate(references, start=1):
             blocks.append(f"[{idx}] 标题：{item['title']}\n标签：{item.get('tags','')}\n内容：{item['content']}")
         return "\n\n".join(blocks)
-
-    def fallback_answer(self, question: str, result: RetrievalResult) -> str:
-        if not result.references:
-            return "当前知识库没有找到足够可靠的处理方案。建议创建在线记录并转人工处理，请补充系统名称、错误提示、影响范围、联系方式和已尝试步骤。"
-        first = result.references[0]
-        answer = ["根据知识库命中内容，建议按以下方式处理：", first["content"]]
-        if result.high_risk:
-            answer.append("\n该问题包含高风险操作或生产影响，数字员工只提供流程建议，实际操作必须转人工并由有权限人员执行。")
-        answer.append("\n引用来源：" + "、".join(item["title"] for item in result.references[:3]))
-        return "\n".join(answer)
 
     def is_high_risk(self, question: str) -> bool:
         return any(pattern in question for pattern in HIGH_RISK_PATTERNS)

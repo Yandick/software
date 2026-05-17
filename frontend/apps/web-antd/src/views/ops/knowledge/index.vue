@@ -1,45 +1,309 @@
 <script lang="ts" setup>
-import { ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 
-import { createKnowledge, listKnowledge } from '#/api/ops';
+import { useUserStore } from '@vben/stores';
 
-const form = ref({ title: '', content: '', tags: '', source_type: 'faq', status: 'published' });
+import { message, Modal } from 'ant-design-vue';
+
+import {
+  changeKnowledgeStatus,
+  createKnowledge,
+  listKnowledge,
+  updateKnowledge,
+} from '#/api/ops';
+
+const userStore = useUserStore();
+const emptyForm = {
+  content: '',
+  source_type: 'faq',
+  status: 'pending_review',
+  tags: '',
+  title: '',
+};
+
+const form = ref({ ...emptyForm });
+const editForm = ref({ id: 0, ...emptyForm });
 const rows = ref<any[]>([]);
+const q = ref('');
+const statusFilter = ref('');
+const sourceTypeFilter = ref('');
+const loading = ref(false);
+const submitting = ref(false);
+const editOpen = ref(false);
+
+const canMaintain = computed(() => {
+  const role = userStore.userInfo?.roles?.[0];
+  return role === 'admin' || role === 'ops';
+});
+
+const columns = [
+  { dataIndex: 'title', title: '标题', width: 240 },
+  { dataIndex: 'source_type', title: '来源', width: 120 },
+  { dataIndex: 'status', title: '状态', width: 120 },
+  { dataIndex: 'tags', title: '标签', width: 180 },
+  { dataIndex: 'updated_at', title: '更新时间', width: 180 },
+  { key: 'action', title: '操作', width: 280 },
+];
+
+const sourceTypeOptions = [
+  { label: 'FAQ 问答', value: 'faq' },
+  { label: 'Runbook', value: 'runbook' },
+  { label: '处理案例', value: 'case' },
+  { label: '制度流程', value: 'policy' },
+  { label: '其他', value: 'other' },
+];
+
+const statusOptions = [
+  { color: 'orange', label: '待审核', value: 'pending_review' },
+  { color: 'green', label: '已发布', value: 'published' },
+  { color: 'default', label: '已下线', value: 'offline' },
+];
 
 async function load() {
-  rows.value = await listKnowledge();
+  loading.value = true;
+  try {
+    rows.value = await listKnowledge({
+      q: q.value.trim(),
+      source_type: sourceTypeFilter.value,
+      status: statusFilter.value,
+    });
+  } finally {
+    loading.value = false;
+  }
 }
 
 async function submit() {
-  await createKnowledge(form.value);
-  form.value = { title: '', content: '', tags: '', source_type: 'faq', status: 'published' };
+  if (!canMaintain.value) {
+    message.warning('只有管理员或运维人员可以维护知识库');
+    return;
+  }
+  if (!form.value.title.trim() || !form.value.content.trim()) {
+    message.warning('请填写知识标题和内容');
+    return;
+  }
+  submitting.value = true;
+  try {
+    await createKnowledge(form.value);
+    form.value = { ...emptyForm };
+    message.success('知识已提交，可审核发布后进入数字员工检索范围');
+    await load();
+  } finally {
+    submitting.value = false;
+  }
+}
+
+function openEdit(record: any) {
+  editForm.value = {
+    content: record.content,
+    id: record.id,
+    source_type: record.source_type,
+    status: record.status,
+    tags: record.tags,
+    title: record.title,
+  };
+  editOpen.value = true;
+}
+
+async function saveEdit() {
+  if (!editForm.value.title.trim() || !editForm.value.content.trim()) {
+    message.warning('请填写知识标题和内容');
+    return;
+  }
+  await updateKnowledge(editForm.value.id, {
+    content: editForm.value.content,
+    source_type: editForm.value.source_type,
+    status: editForm.value.status,
+    tags: editForm.value.tags,
+    title: editForm.value.title,
+  });
+  editOpen.value = false;
+  message.success('知识条目已更新');
   await load();
 }
 
-load();
+function confirmStatus(record: any, status: string) {
+  const meta = statusMeta(status);
+  Modal.confirm({
+    content:
+      status === 'published'
+        ? '发布后该条知识会进入数字员工 RAG 检索范围，请确认内容已审核且不含敏感信息。'
+        : '状态变更会写入审计日志；下线后该条知识不会再被数字员工用于回答。',
+    okText: `确认${meta.label}`,
+    onOk: async () => {
+      await changeKnowledgeStatus(record.id, status);
+      message.success(`知识状态已更新为${meta.label}`);
+      await load();
+    },
+    title: `确认将「${record.title}」设为${meta.label}？`,
+  });
+}
+
+function sourceTypeLabel(value: string) {
+  return sourceTypeOptions.find((item) => item.value === value)?.label || value || '未设置';
+}
+
+function statusMeta(value: string) {
+  return statusOptions.find((item) => item.value === value) || { color: 'default', label: value || '未设置', value };
+}
+
+onMounted(load);
 </script>
 
 <template>
-  <div class="p-5">
-    <a-card title="新增知识条目">
+  <div class="knowledge-page p-5">
+    <div class="mb-5 rounded-3xl bg-slate-950 p-6 text-white">
+      <div class="text-sm font-semibold uppercase tracking-[0.2em] text-amber-200">Knowledge Base</div>
+      <h1 class="mt-3 text-3xl font-semibold">知识库维护与审核</h1>
+      <p class="mt-3 max-w-3xl text-white/70">
+        FAQ、Runbook、制度流程和已解决案例先作为候选知识沉淀，审核发布后才会进入数字员工检索范围。
+      </p>
+    </div>
+
+    <a-alert
+      v-if="!canMaintain"
+      class="mb-5"
+      message="当前账号没有知识维护权限"
+      description="你可以查看知识条目；新增、编辑、发布、下线需要管理员或运维人员角色，并会写入审计日志。"
+      show-icon
+      type="info"
+    />
+
+    <a-card title="提交候选知识">
       <div class="grid gap-4 md:grid-cols-2">
-        <a-input v-model:value="form.title" placeholder="知识标题" />
-        <a-input v-model:value="form.tags" placeholder="标签，如：账号,冻结,FAQ" />
+        <a-input v-model:value="form.title" :disabled="!canMaintain" placeholder="知识标题，如：VPN 无法连接处理步骤" />
+        <a-input v-model:value="form.tags" :disabled="!canMaintain" placeholder="标签，如：VPN,网络,远程办公" />
+        <a-select v-model:value="form.source_type" :disabled="!canMaintain" placeholder="来源类型">
+          <a-select-option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-select v-model:value="form.status" :disabled="!canMaintain" placeholder="审核状态">
+          <a-select-option v-for="item in statusOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
       </div>
-      <a-textarea v-model:value="form.content" class="mt-4" :rows="5" placeholder="知识内容" />
-      <a-button class="mt-4" type="primary" @click="submit">新增知识</a-button>
+      <a-textarea
+        v-model:value="form.content"
+        class="mt-4"
+        :disabled="!canMaintain"
+        :rows="5"
+        placeholder="请填写处理步骤、适用范围、风险提示和转人工条件。"
+      />
+      <a-button class="mt-4" :disabled="!canMaintain" :loading="submitting" type="primary" @click="submit">
+        提交知识
+      </a-button>
     </a-card>
 
-    <div class="mt-5 grid gap-4 md:grid-cols-2">
-      <a-card v-for="item in rows" :key="item.id" :title="item.title">
-        <p>{{ item.content }}</p>
-        <div class="mt-3">
-          <a-tag>{{ item.status }}</a-tag>
-          <a-tag>{{ item.source_type }}</a-tag>
-          <a-tag>{{ item.tags }}</a-tag>
-        </div>
-      </a-card>
-    </div>
+    <a-card class="mt-5" title="知识条目">
+      <div class="mb-4 flex flex-wrap items-center gap-3">
+        <a-input-search
+          v-model:value="q"
+          allow-clear
+          class="min-w-[260px] max-w-lg"
+          placeholder="搜索标题、内容或标签"
+          @search="load"
+        />
+        <a-select v-model:value="statusFilter" allow-clear class="w-36" placeholder="状态" @change="load">
+          <a-select-option v-for="item in statusOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-select v-model:value="sourceTypeFilter" allow-clear class="w-40" placeholder="来源" @change="load">
+          <a-select-option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-button :loading="loading" @click="load">刷新</a-button>
+      </div>
+
+      <a-table :columns="columns" :data-source="rows" :loading="loading" row-key="id">
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.dataIndex === 'title'">
+            <div class="font-medium">#{{ record.id }} {{ record.title }}</div>
+            <div class="mt-1 line-clamp-2 text-sm text-slate-500">{{ record.content }}</div>
+          </template>
+          <template v-if="column.dataIndex === 'source_type'">
+            <a-tag>{{ sourceTypeLabel(record.source_type) }}</a-tag>
+          </template>
+          <template v-if="column.dataIndex === 'status'">
+            <a-tag :color="statusMeta(record.status).color">{{ statusMeta(record.status).label }}</a-tag>
+          </template>
+          <template v-if="column.dataIndex === 'tags'">
+            <a-space wrap>
+              <a-tag v-for="tag in String(record.tags || '').split(',').filter(Boolean)" :key="tag">
+                {{ tag.trim() }}
+              </a-tag>
+              <span v-if="!record.tags" class="text-slate-400">未设置</span>
+            </a-space>
+          </template>
+          <template v-if="column.key === 'action'">
+            <a-space wrap>
+              <a-button :disabled="!canMaintain" size="small" @click="openEdit(record)">编辑</a-button>
+              <a-button
+                v-if="record.status !== 'published'"
+                :disabled="!canMaintain"
+                size="small"
+                type="primary"
+                @click="confirmStatus(record, 'published')"
+              >
+                发布
+              </a-button>
+              <a-button
+                v-if="record.status !== 'pending_review'"
+                :disabled="!canMaintain"
+                size="small"
+                @click="confirmStatus(record, 'pending_review')"
+              >
+                退回审核
+              </a-button>
+              <a-button
+                v-if="record.status !== 'offline'"
+                :disabled="!canMaintain"
+                danger
+                size="small"
+                @click="confirmStatus(record, 'offline')"
+              >
+                下线
+              </a-button>
+            </a-space>
+          </template>
+        </template>
+      </a-table>
+    </a-card>
+
+    <a-modal v-model:open="editOpen" title="编辑知识条目" ok-text="保存" @ok="saveEdit">
+      <a-form layout="vertical">
+        <a-form-item label="标题">
+          <a-input v-model:value="editForm.title" placeholder="知识标题" />
+        </a-form-item>
+        <a-form-item label="标签">
+          <a-input v-model:value="editForm.tags" placeholder="使用英文逗号分隔多个标签" />
+        </a-form-item>
+        <a-form-item label="来源类型">
+          <a-select v-model:value="editForm.source_type">
+            <a-select-option v-for="item in sourceTypeOptions" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="审核状态">
+          <a-select v-model:value="editForm.status">
+            <a-select-option v-for="item in statusOptions" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </a-select-option>
+          </a-select>
+        </a-form-item>
+        <a-form-item label="内容">
+          <a-textarea v-model:value="editForm.content" :rows="7" placeholder="知识内容" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
+<style scoped>
+.knowledge-page :deep(.ant-card) {
+  border-radius: 20px;
+}
+</style>

@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 8
     model_path: str = "models/qwen3-1.7b"
-    inference_backend: str = "auto"
     vllm_base_url: str = "http://127.0.0.1:8000/v1"
     vllm_model_name: str = "qwen3-1.7b"
     enable_thinking: bool = False
