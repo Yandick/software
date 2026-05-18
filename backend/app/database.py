@@ -76,8 +76,13 @@ def init_db() -> None:
         create table if not exists ops_accounts (
           id integer primary key autoincrement,
           account_name text unique not null,
+          owner_name text not null default '',
+          department text not null default '',
+          contact_phone text not null default '',
           permission_scope text not null,
           status text not null default 'active',
+          risk_level text not null default 'medium',
+          expires_at text not null default '',
           remark text not null default '',
           created_at text not null,
           updated_at text not null
@@ -99,8 +104,33 @@ def init_db() -> None:
           content text not null,
           created_at text not null
         );
+        create table if not exists issue_attachments (
+          id integer primary key autoincrement,
+          original_name text not null,
+          stored_name text not null,
+          content_type text not null default '',
+          size integer not null default 0,
+          uploaded_by integer,
+          created_at text not null
+        );
+        create table if not exists account_approvals (
+          id integer primary key autoincrement,
+          account_id integer not null,
+          action text not null,
+          payload_json text not null default '{}',
+          reason text not null default '',
+          status text not null default 'pending',
+          requested_by integer,
+          approved_by integer,
+          decision_reason text not null default '',
+          decided_at text,
+          created_at text not null,
+          updated_at text not null
+        );
         """)
         ensure_issue_columns(conn)
+        ensure_account_columns(conn)
+        ensure_account_approval_columns(conn)
         ensure_issue_events(conn)
         seed_users(conn)
         seed_knowledge(conn)
@@ -115,10 +145,28 @@ def ensure_issue_columns(conn: sqlite3.Connection) -> None:
         "impact_scope": "text not null default ''",
         "handled_by": "integer",
         "visited_by": "integer",
+        "user_satisfaction_score": "integer",
+        "user_feedback": "text not null default ''",
+        "attachment_url": "text not null default ''",
+        "log_excerpt": "text not null default ''",
     }
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"alter table issues add column {name} {definition}")
+
+
+def ensure_account_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(ops_accounts)").fetchall()}
+    columns = {
+        "owner_name": "text not null default ''",
+        "department": "text not null default ''",
+        "contact_phone": "text not null default ''",
+        "risk_level": "text not null default 'medium'",
+        "expires_at": "text not null default ''",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table ops_accounts add column {name} {definition}")
 
 
 def ensure_issue_events(conn: sqlite3.Connection) -> None:
@@ -133,6 +181,16 @@ def ensure_issue_events(conn: sqlite3.Connection) -> None:
       created_at text not null
     );
     """)
+
+
+def ensure_account_approval_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(account_approvals)").fetchall()}
+    columns = {
+        "decision_reason": "text not null default ''",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table account_approvals add column {name} {definition}")
 
 
 def seed_users(conn: sqlite3.Connection) -> None:
@@ -168,12 +226,22 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
         return dict(row) if row else None
 
 
+def write_audit(
+    conn: sqlite3.Connection,
+    event_type: str,
+    target_type: str,
+    content: str,
+    target_id: int | None = None,
+) -> None:
+    conn.execute(
+        "insert into audit_logs(event_type,target_type,target_id,content,created_at) values(?,?,?,?,?)",
+        (event_type, target_type, target_id, content, utc_now()),
+    )
+
+
 def audit(event_type: str, target_type: str, content: str, target_id: int | None = None) -> None:
     with connect() as conn:
-        conn.execute(
-            "insert into audit_logs(event_type,target_type,target_id,content,created_at) values(?,?,?,?,?)",
-            (event_type, target_type, target_id, content, utc_now()),
-        )
+        write_audit(conn, event_type, target_type, content, target_id)
 
 
 def issue_event(

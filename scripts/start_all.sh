@@ -14,6 +14,7 @@ VLLM_HOST="${OPS_VLLM_HOST:-127.0.0.1}"
 VLLM_PORT="${OPS_VLLM_PORT:-8000}"
 MODEL_PATH="${OPS_MODEL_PATH:-models/qwen3-1.7b}"
 SERVED_MODEL_NAME="${OPS_VLLM_MODEL_NAME:-qwen3-1.7b}"
+VLLM_REASONING_PARSER="${VLLM_REASONING_PARSER:-qwen3}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 PNPM_VERSION="${PNPM_VERSION:-10.33.0}"
 CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
@@ -22,7 +23,7 @@ START_FRONTEND=1
 INSTALL_FRONTEND=0
 VLLM_TIMEOUT="${VLLM_TIMEOUT:-420}"
 BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-90}"
-VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.90}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-40960}"
 
 usage() {
@@ -41,6 +42,7 @@ Env:
   CUDA_VISIBLE_DEVICES  指定可见 GPU；脚本默认设为 0
   OPS_MODEL_PATH        模型路径，默认 models/qwen3-1.7b
   OPS_VLLM_MODEL_NAME   vLLM served model name，默认 qwen3-1.7b
+  VLLM_REASONING_PARSER vLLM reasoning parser，默认 qwen3
   VLLM_TIMEOUT          等待 vLLM 秒数，默认 420
   VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率，默认 0.90
   VLLM_MAX_MODEL_LEN    vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
@@ -240,7 +242,7 @@ run_python_bg vllm -m vllm.entrypoints.openai.api_server \
   --served-model-name "$SERVED_MODEL_NAME" \
   --host "$VLLM_HOST" \
   --port "$VLLM_PORT" \
-  --reasoning-parser deepseek_r1 \
+  --reasoning-parser "$VLLM_REASONING_PARSER" \
   --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
   --max-model-len "$VLLM_MAX_MODEL_LEN"
 if wait_http "http://$VLLM_HOST:$VLLM_PORT/v1/models" "$VLLM_TIMEOUT" vllm "$RUN_DIR/vllm.pid"; then

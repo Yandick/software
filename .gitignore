@@ -1,1 +1,33 @@
+# Local models and generated runtime state
 models/
+backend/data/*.db
+backend/data/*.db-*
+backend/data/uploads/
+logs/
+.run/
+
+# Python cache / virtual envs
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Frontend dependencies and build outputs
+node_modules/
+frontend/**/node_modules/
+frontend/**/dist/
+frontend/apps/web-antd/dist/
+
+# Local config and OS/editor files
+.env
+.env.*
+!.env.example
+!frontend/apps/web-antd/.env
+!frontend/apps/web-antd/.env.*
+.DS_Store
+*.swp
+*.swo

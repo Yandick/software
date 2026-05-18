@@ -42,6 +42,8 @@ class LLMService:
             "vllm_model_name": settings.vllm_model_name,
             "model_path": settings.model_path,
             "enable_thinking": settings.enable_thinking,
+            "reasoning_request_supported": True,
+            "reasoning_parser": "qwen3",
         }
 
     def _build_messages(self, question: str, context: str, thinking: bool) -> list[dict[str, str]]:
@@ -93,6 +95,8 @@ class LLMService:
                 "ok": True,
                 "content": content.strip(),
                 "reasoning_content": reasoning or parsed_reasoning,
+                "reasoning_enabled": thinking,
+                "reasoning_available": bool(reasoning or parsed_reasoning),
                 "status": "vllm",
             }
         except Exception as exc:

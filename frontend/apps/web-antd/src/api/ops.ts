@@ -1,7 +1,7 @@
 import { requestClient } from '#/api/request';
 
-export function askQuestion(question: string) {
-  return requestClient.post<any>('/qa/ask', { question });
+export function askQuestion(question: string, enableThinking = false) {
+  return requestClient.post<any>('/qa/ask', { enable_thinking: enableThinking, question });
 }
 
 export function suggestQuestions(q = '') {
@@ -12,12 +12,24 @@ export function getLlmStatus() {
   return requestClient.get<any>('/llm/status');
 }
 
-export function listIssues(status = '') {
-  return requestClient.get<any[]>('/issues', { params: { status } });
+export function listIssues(status = '', q = '') {
+  return requestClient.get<any[]>('/issues', { params: { q, status } });
 }
 
 export function createIssue(data: Record<string, any>) {
   return requestClient.post<any>('/issues', data);
+}
+
+export function draftIssue(description: string) {
+  return requestClient.post<any>('/issues/draft', { description });
+}
+
+export function uploadIssueAttachment(file: File) {
+  const data = new FormData();
+  data.append('file', file);
+  return requestClient.post<any>('/issues/attachments', data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 }
 
 export function handleIssue(id: number, solution: string) {
@@ -28,8 +40,24 @@ export function visitIssue(id: number, data: Record<string, any>) {
   return requestClient.post<any>(`/issues/${id}/visit`, data);
 }
 
+export function feedbackIssue(id: number, data: Record<string, any>) {
+  return requestClient.post<any>(`/issues/${id}/feedback`, data);
+}
+
+export function assistIssue(id: number) {
+  return requestClient.get<any>(`/issues/${id}/assist`);
+}
+
+export function createIssueKnowledgeCandidate(id: number) {
+  return requestClient.post<any>(`/issues/${id}/knowledge-candidate`);
+}
+
 export function listAccounts(q = '') {
   return requestClient.get<any[]>('/accounts', { params: { q } });
+}
+
+export function exportAccounts(q = '') {
+  return requestClient.get<any>('/accounts/export', { params: { q } });
 }
 
 export function createAccount(data: Record<string, any>) {
@@ -46,6 +74,18 @@ export function freezeAccount(id: number) {
 
 export function unfreezeAccount(id: number) {
   return requestClient.post<any>(`/accounts/${id}/unfreeze`);
+}
+
+export function listAccountApprovals(status = '') {
+  return requestClient.get<any[]>('/account-approvals', { params: { status } });
+}
+
+export function createAccountApproval(data: Record<string, any>) {
+  return requestClient.post<any>('/account-approvals', data);
+}
+
+export function decideAccountApproval(id: number, decision: string, reason = '') {
+  return requestClient.post<any>(`/account-approvals/${id}/decision`, { decision, reason });
 }
 
 export function listKnowledge(params: Record<string, any> = {}) {
@@ -68,6 +108,6 @@ export function getStats() {
   return requestClient.get<any>('/audit/stats');
 }
 
-export function getAuditLogs() {
-  return requestClient.get<any>('/audit/logs');
+export function getAuditLogs(params: Record<string, any> = {}) {
+  return requestClient.get<any>('/audit/logs', { params });
 }
