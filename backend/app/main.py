@@ -157,6 +157,89 @@ def build_issue_draft(description: str) -> dict[str, Any]:
     }
 
 
+def build_employee_decision(question: str, retrieval: Any, references: list[dict[str, Any]]) -> dict[str, Any]:
+    draft = build_issue_draft(question)
+    if retrieval.high_risk:
+        risk_level = "high"
+    elif draft["priority"] == "high":
+        risk_level = "high"
+    elif retrieval.confidence >= 0.25 and references:
+        risk_level = "low"
+    else:
+        risk_level = "medium"
+
+    need_human = retrieval.high_risk or retrieval.confidence < 0.08 or not references
+    handoff_reasons = []
+    if retrieval.high_risk:
+        handoff_reasons.append("涉及高风险账号、权限、生产或批量操作，需要人工受控处理")
+    if not references:
+        handoff_reasons.append("私有知识库没有命中可引用知识")
+    elif retrieval.confidence < 0.08:
+        handoff_reasons.append("知识命中置信度较低，需要人工确认")
+    if draft["missing_fields"]:
+        handoff_reasons.append(f"缺少关键信息：{'、'.join(draft['missing_fields'])}")
+
+    next_actions = []
+    if references and not retrieval.high_risk:
+        next_actions.append({"key": "self_check", "label": "按知识库步骤自助处理", "enabled": True})
+    if references:
+        next_actions.append({"key": "view_references", "label": "查看引用知识", "enabled": True})
+    if draft["missing_fields"]:
+        next_actions.append({"key": "complete_fields", "label": "补充缺失字段", "enabled": True})
+    next_actions.append({"key": "create_issue", "label": "创建在线记录", "enabled": True})
+    if draft["category"] == "account" or retrieval.high_risk:
+        next_actions.append({"key": "controlled_workflow", "label": "走受控账号/人工审批流程", "enabled": True})
+
+    clarification_templates = {
+        "联系方式": "请补充联系电话或企业 IM 联系方式，便于运维人员回访。",
+        "影响范围": "请补充影响范围：仅你本人、部分同事、整个部门，还是大面积用户？",
+        "截图/附件链接": "请补充截图、附件或共享路径，用于定位具体报错界面。",
+        "错误日志或报错原文": "请复制错误提示、日志关键行或失败时间点。",
+    }
+    clarification_questions = [
+        clarification_templates.get(field, f"请补充 {field}。")
+        for field in draft["missing_fields"]
+    ]
+    automation_summary = [
+        f"已识别问题类型：{draft['category']}",
+        f"已评估风险等级：{risk_level}",
+        f"已检索私有知识库：命中 {len(references)} 条，最高置信度 {round(float(retrieval.confidence), 4)}",
+    ]
+    if draft["missing_fields"]:
+        automation_summary.append(f"已发现待补充字段：{'、'.join(draft['missing_fields'])}")
+    if need_human:
+        automation_summary.append("已准备在线记录草稿，可一键转人工处理")
+
+    return {
+        "intent": draft["category"],
+        "intent_label": {
+            "account": "账号与权限",
+            "business": "业务系统",
+            "database": "数据库/中间件",
+            "general": "通用咨询",
+            "network": "网络/VPN",
+        }.get(draft["category"], "通用咨询"),
+        "risk_level": risk_level,
+        "confidence": round(float(retrieval.confidence), 4),
+        "need_human": need_human,
+        "handoff_reasons": handoff_reasons,
+        "missing_fields": draft["missing_fields"],
+        "clarification_questions": clarification_questions,
+        "automation_summary": automation_summary,
+        "next_actions": next_actions,
+        "issue_draft": {
+            "title": draft["title"],
+            "description": draft["description"],
+            "priority": "high" if need_human or risk_level == "high" else draft["priority"],
+            "category": draft["category"],
+            "impact_scope": draft["impact_scope"],
+            "contact_phone": draft["contact_phone"],
+            "attachment_url": draft["attachment_url"],
+            "log_excerpt": draft["log_excerpt"],
+        },
+    }
+
+
 def build_issue_assist(issue: dict[str, Any], references: list[dict[str, Any]]) -> dict[str, Any]:
     text = f"{issue.get('title', '')}\n{issue.get('description', '')}\n{issue.get('log_excerpt', '')}"
     missing = []
@@ -305,6 +388,60 @@ def build_accounts_csv(accounts: list[dict[str, Any]]) -> str:
     return output.getvalue()
 
 
+def parse_message_metadata(value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def load_qa_conversation(conn: Any, conversation_id: int, user: dict[str, Any]) -> Any:
+    row = conn.execute("select * from qa_conversations where id=?", (conversation_id,)).fetchone()
+    ensure_row_exists(row, "数字员工会话")
+    if user.get("role") == "user" and row["user_id"] != user.get("id"):
+        raise HTTPException(status_code=403, detail="只能查看自己的数字员工会话")
+    return row
+
+
+def prepare_qa_conversation(data: QuestionRequest, user: dict[str, Any]) -> tuple[int, str]:
+    now = utc_now()
+    with connect() as conn:
+        if data.conversation_id:
+            row = load_qa_conversation(conn, data.conversation_id, user)
+            conversation_id = int(row["id"])
+            conn.execute("update qa_conversations set updated_at=? where id=?", (now, conversation_id))
+        else:
+            cur = conn.execute(
+                "insert into qa_conversations(user_id,title,status,created_at,updated_at) values(?,?,?,?,?)",
+                (user.get("id"), data.question[:40], "active", now, now),
+            )
+            conversation_id = int(cur.lastrowid)
+        rows = conn.execute(
+            """
+            select role,content from qa_messages
+            where conversation_id=?
+            order by id desc
+            limit 8
+            """,
+            (conversation_id,),
+        ).fetchall()
+    history = list(reversed(rows))
+    if not history:
+        return conversation_id, data.question
+    history_text = "\n".join(f"{row['role']}: {row['content'][:500]}" for row in history)
+    return conversation_id, f"历史对话：\n{history_text}\n\n当前用户补充/问题：\n{data.question}"
+
+
+def write_qa_message(conversation_id: int, role: str, content: str, metadata: dict[str, Any] | None = None) -> None:
+    with connect() as conn:
+        conn.execute(
+            "insert into qa_messages(conversation_id,role,content,metadata_json,created_at) values(?,?,?,?,?)",
+            (conversation_id, role, content, json.dumps(metadata or {}, ensure_ascii=False), utc_now()),
+        )
+        conn.execute("update qa_conversations set updated_at=? where id=?", (utc_now(), conversation_id))
+
+
 def create_account_approval_record(
     conn: Any,
     account_id: int,
@@ -398,32 +535,60 @@ def menus(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
 
 @app.post("/api/qa/ask")
 def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    result = rag_service.search(data.question)
+    conversation_id, effective_question = prepare_qa_conversation(data, user)
+    result = rag_service.search(effective_question)
     context = rag_service.build_context(result.references)
     try:
-        model_result = llm_service.generate(data.question, context, data.enable_thinking)
+        model_result = llm_service.generate(effective_question, context, data.enable_thinking)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=f"LLM 数字员工不可用：{exc}") from exc
     answer = model_result["content"]
-    need_human = result.high_risk or result.confidence < 0.08 or not result.references
+    refs = [{"id": item["id"], "title": item["title"], "tags": item.get("tags", ""), "score": item.get("score", 0)} for item in result.references]
+    decision = build_employee_decision(effective_question, result, refs)
+    need_human = decision["need_human"]
     if need_human:
         answer += "\n\n系统判断该问题建议转人工：请创建在线记录，补充影响范围、联系方式和错误截图/日志。"
-    refs = [{"id": item["id"], "title": item["title"], "tags": item.get("tags", ""), "score": item.get("score", 0)} for item in result.references]
     with connect() as conn:
         conn.execute(
             "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
             (data.question, answer, int(need_human), model_result.get("status", "unknown"), json.dumps(refs, ensure_ascii=False), utc_now()),
         )
-    next_actions = [
-        {"key": "create_issue", "label": "创建在线记录", "enabled": True},
-        {"key": "view_references", "label": "查看引用知识", "enabled": bool(refs)},
-    ]
-    if not need_human:
-        next_actions.insert(0, {"key": "self_check", "label": "按步骤自助处理", "enabled": True})
+    write_qa_message(conversation_id, "user", data.question)
+    write_qa_message(
+        conversation_id,
+        "assistant",
+        answer,
+        {
+            "automation_summary": decision["automation_summary"],
+            "clarification_questions": decision["clarification_questions"],
+            "confidence": decision["confidence"],
+            "handoff_reasons": decision["handoff_reasons"],
+            "intent": decision["intent"],
+            "intent_label": decision["intent_label"],
+            "issue_draft": decision["issue_draft"],
+            "missing_fields": decision["missing_fields"],
+            "model_status": model_result.get("status", "unknown"),
+            "risk_level": decision["risk_level"],
+            "need_human": need_human,
+            "next_actions": decision["next_actions"],
+            "references": refs,
+            "reasoning_available": model_result.get("reasoning_available", False),
+            "reasoning_enabled": model_result.get("reasoning_enabled", False),
+        },
+    )
     return {
+        "conversation_id": conversation_id,
         "answer": answer,
         "references": refs,
         "need_human": need_human,
+        "intent": decision["intent"],
+        "intent_label": decision["intent_label"],
+        "risk_level": decision["risk_level"],
+        "confidence": decision["confidence"],
+        "missing_fields": decision["missing_fields"],
+        "clarification_questions": decision["clarification_questions"],
+        "automation_summary": decision["automation_summary"],
+        "handoff_reasons": decision["handoff_reasons"],
         "model_status": model_result.get("status", "unknown"),
         "llm_used": True,
         "reasoning_enabled": model_result.get("reasoning_enabled", False),
@@ -433,18 +598,81 @@ def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> 
             "role": "企业运维数字员工",
             "mode": "llm",
         },
-        "next_actions": next_actions,
-        "issue_draft": {
-            "title": data.question[:40],
-            "description": data.question,
-            "priority": "high" if need_human else "medium",
-        },
+        "next_actions": decision["next_actions"],
+        "issue_draft": decision["issue_draft"],
     }
 
 
 @app.get("/api/qa/suggest")
 def suggest(q: str = "", limit: int = Query(8, ge=1, le=20), user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
     return rag_service.suggest(q, limit)
+
+
+@app.get("/api/qa/conversations")
+def list_qa_conversations(
+    limit: int = Query(20, ge=1, le=100),
+    user: dict[str, Any] = Depends(current_user),
+) -> list[dict[str, Any]]:
+    params: list[Any] = []
+    where = ""
+    if user.get("role") == "user":
+        where = "where c.user_id=?"
+        params.append(user["id"])
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            select
+              c.*,
+              u.real_name as user_name,
+              count(m.id) as message_count,
+              max(m.created_at) as last_message_at,
+              (
+                select m2.content
+                from qa_messages m2
+                where m2.conversation_id = c.id
+                order by m2.id desc
+                limit 1
+              ) as last_message
+            from qa_conversations c
+            left join users u on u.id = c.user_id
+            left join qa_messages m on m.conversation_id = c.id
+            {where}
+            group by c.id
+            order by c.updated_at desc, c.id desc
+            limit ?
+            """,
+            [*params, limit],
+        ).fetchall()
+    conversations = rows_to_dicts(rows)
+    for item in conversations:
+        preview = (item.get("last_message") or item.get("title") or "").replace("\n", " ").strip()
+        item["last_message"] = preview[:120]
+    return conversations
+
+
+@app.get("/api/qa/conversations/{conversation_id}")
+def get_qa_conversation(conversation_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    with connect() as conn:
+        row = load_qa_conversation(conn, conversation_id, user)
+        conversation = dict(row)
+        owner = conn.execute("select real_name from users where id=?", (conversation.get("user_id"),)).fetchone()
+        if owner:
+            conversation["user_name"] = owner["real_name"]
+        message_rows = conn.execute(
+            """
+            select id,role,content,metadata_json,created_at
+            from qa_messages
+            where conversation_id=?
+            order by id asc
+            """,
+            (conversation_id,),
+        ).fetchall()
+    messages = []
+    for row in message_rows:
+        item = dict(row)
+        item["metadata"] = parse_message_metadata(item.pop("metadata_json", "{}"))
+        messages.append(item)
+    return {"conversation": conversation, "messages": messages}
 
 
 @app.post("/api/issues/draft")

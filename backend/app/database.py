@@ -96,6 +96,22 @@ def init_db() -> None:
           references_json text not null default '[]',
           created_at text not null
         );
+        create table if not exists qa_conversations (
+          id integer primary key autoincrement,
+          user_id integer,
+          title text not null default '',
+          status text not null default 'active',
+          created_at text not null,
+          updated_at text not null
+        );
+        create table if not exists qa_messages (
+          id integer primary key autoincrement,
+          conversation_id integer not null,
+          role text not null,
+          content text not null,
+          metadata_json text not null default '{}',
+          created_at text not null
+        );
         create table if not exists audit_logs (
           id integer primary key autoincrement,
           event_type text not null,

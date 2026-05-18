@@ -1,11 +1,23 @@
 import { requestClient } from '#/api/request';
 
-export function askQuestion(question: string, enableThinking = false) {
-  return requestClient.post<any>('/qa/ask', { enable_thinking: enableThinking, question });
+export function askQuestion(question: string, enableThinking = false, conversationId?: number | null) {
+  return requestClient.post<any>('/qa/ask', {
+    conversation_id: conversationId || undefined,
+    enable_thinking: enableThinking,
+    question,
+  });
 }
 
 export function suggestQuestions(q = '') {
   return requestClient.get<any[]>('/qa/suggest', { params: { q } });
+}
+
+export function listQaConversations(limit = 20) {
+  return requestClient.get<any[]>('/qa/conversations', { params: { limit } });
+}
+
+export function getQaConversation(id: number) {
+  return requestClient.get<any>(`/qa/conversations/${id}`);
 }
 
 export function getLlmStatus() {

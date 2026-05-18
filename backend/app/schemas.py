@@ -22,6 +22,7 @@ class KnowledgeStatusUpdate(BaseModel):
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1)
     enable_thinking: bool | None = None
+    conversation_id: int | None = None
 
 
 class IssueDraftRequest(BaseModel):
