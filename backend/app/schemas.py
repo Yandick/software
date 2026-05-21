@@ -45,6 +45,11 @@ class IssueHandle(BaseModel):
     solution: str = Field(min_length=1)
 
 
+class IssueStatusUpdate(BaseModel):
+    status: str = Field(min_length=1)
+    note: str = ""
+
+
 class IssueVisit(BaseModel):
     resolved: bool
     satisfaction_score: int | None = None

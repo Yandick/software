@@ -6,7 +6,9 @@ import { useUserStore } from '@vben/stores';
 import { message, Modal } from 'ant-design-vue';
 
 import {
+  acceptIssue,
   assistIssue,
+  changeIssueStatus,
   createIssue,
   createIssueKnowledgeCandidate,
   feedbackIssue,
@@ -34,6 +36,8 @@ const q = ref('');
 const loading = ref(false);
 const submitting = ref(false);
 const handling = ref<Record<number, boolean>>({});
+const accepting = ref<Record<number, boolean>>({});
+const statusChanging = ref<Record<number, boolean>>({});
 const uploading = ref(false);
 const assisting = ref<Record<number, boolean>>({});
 const assistMap = ref<Record<number, any>>({});
@@ -49,8 +53,11 @@ const canHandle = computed(() => {
 
 const statusOptions = [
   { label: '全部', value: '' },
-  { label: '待处理', value: 'pending' },
-  { label: '已处理', value: 'handled' },
+  { label: '已提交', value: 'submitted' },
+  { label: '已受理', value: 'accepted' },
+  { label: '处理中', value: 'processing' },
+  { label: '待补充', value: 'need_user_info' },
+  { label: '待回访', value: 'pending_visit' },
   { label: '已关闭', value: 'closed' },
 ];
 
@@ -69,10 +76,20 @@ const priorityMeta: Record<string, { color: string; label: string }> = {
 };
 
 const statusMeta: Record<string, { color: string; label: string }> = {
+  accepted: { color: 'cyan', label: '已受理' },
   closed: { color: 'green', label: '已关闭' },
-  handled: { color: 'blue', label: '已处理/待回访' },
+  handled: { color: 'blue', label: '待回访' },
+  need_user_info: { color: 'purple', label: '待用户补充' },
   pending: { color: 'orange', label: '待处理' },
+  pending_visit: { color: 'blue', label: '待回访' },
+  processing: { color: 'geekblue', label: '处理中' },
+  submitted: { color: 'orange', label: '已提交' },
 };
+
+const workflowActions = [
+  { label: '标记处理中', status: 'processing' },
+  { label: '待用户补充', status: 'need_user_info' },
+];
 
 async function load() {
   loading.value = true;
@@ -120,6 +137,28 @@ async function beforeUpload(file: File) {
   return false;
 }
 
+async function accept(id: number) {
+  accepting.value[id] = true;
+  try {
+    await acceptIssue(id);
+    message.success('已受理在线记录');
+    await load();
+  } finally {
+    accepting.value[id] = false;
+  }
+}
+
+async function markStatus(id: number, status: string) {
+  statusChanging.value[id] = true;
+  try {
+    await changeIssueStatus(id, status);
+    message.success('状态已更新');
+    await load();
+  } finally {
+    statusChanging.value[id] = false;
+  }
+}
+
 async function handle(id: number) {
   const text = solution.value[id]?.trim();
   if (!text) {
@@ -162,7 +201,7 @@ function confirmVisit(id: number, resolved: boolean) {
   Modal.confirm({
     content: resolved
       ? '确认用户已回访并认可解决结果？确认后会关闭记录，并把处理结果沉淀为知识案例。'
-      : '确认用户反馈仍未解决？确认后记录会回到待处理状态。',
+      : '确认用户反馈仍未解决？确认后记录会转为待用户补充。',
     okText: '确认',
     onOk: () => visit(id, resolved),
     title: resolved ? '回访已解决' : '回访未解决',
@@ -205,6 +244,16 @@ async function submitFeedback() {
 
 function metaOf(map: Record<string, { color: string; label: string }>, value: string) {
   return map[value] || { color: 'default', label: value || '未设置' };
+}
+
+function canVisit(item: any) {
+  return item.status === 'pending_visit' || item.status === 'handled';
+}
+
+function attachmentName(url = '') {
+  if (!url) return '';
+  const clean = url.split('?')[0] || '';
+  return clean.split('/').filter(Boolean).pop() || url;
 }
 
 onMounted(load);
@@ -311,7 +360,12 @@ onMounted(load);
                   <span>联系电话：{{ item.contact_phone || '未填写' }}</span>
                   <span>影响范围：{{ item.impact_scope || '未填写' }}</span>
                   <span>更新时间：{{ item.updated_at }}</span>
-                  <span v-if="item.attachment_url">附件/截图：{{ item.attachment_url }}</span>
+                  <span>处理人：{{ item.handled_by_name || '待分派' }}</span>
+                  <span>受理耗时：{{ item.response_minutes === null || item.response_minutes === undefined ? '未受理' : `${item.response_minutes} 分钟` }}</span>
+                  <span>处理耗时：{{ item.handling_minutes === null || item.handling_minutes === undefined ? '未完成' : `${item.handling_minutes} 分钟` }}</span>
+                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" target="_blank">
+                    附件/截图：{{ attachmentName(item.attachment_url) }}
+                  </a>
                   <span v-if="item.user_satisfaction_score">用户评价：{{ item.user_satisfaction_score }} 分</span>
                   <span v-if="item.user_feedback">评价意见：{{ item.user_feedback }}</span>
                 </div>
@@ -338,6 +392,27 @@ onMounted(load);
                 <a-empty v-else description="暂无处理事件" />
 
                 <div v-if="canHandle && item.status !== 'closed'" class="mt-4 border-t border-slate-200 pt-4">
+                  <div class="mb-3 flex flex-wrap gap-2">
+                    <a-button
+                      v-if="item.status === 'submitted' || item.status === 'pending'"
+                      :loading="accepting[item.id]"
+                      size="small"
+                      type="primary"
+                      @click="accept(item.id)"
+                    >
+                      受理
+                    </a-button>
+                    <a-button
+                      v-for="action in workflowActions"
+                      :key="`${item.id}-${action.status}`"
+                      :disabled="item.status === action.status"
+                      :loading="statusChanging[item.id]"
+                      size="small"
+                      @click="markStatus(item.id, action.status)"
+                    >
+                      {{ action.label }}
+                    </a-button>
+                  </div>
                   <a-button
                     class="mb-3"
                     :loading="assisting[item.id]"
@@ -397,8 +472,8 @@ onMounted(load);
                     <a-button :loading="handling[item.id]" size="small" type="primary" @click="handle(item.id)">
                       提交处理
                     </a-button>
-                    <a-button size="small" @click="confirmVisit(item.id, true)">回访已解决</a-button>
-                    <a-button size="small" danger @click="confirmVisit(item.id, false)">回访未解决</a-button>
+                    <a-button v-if="canVisit(item)" size="small" @click="confirmVisit(item.id, true)">回访已解决</a-button>
+                    <a-button v-if="canVisit(item)" size="small" danger @click="confirmVisit(item.id, false)">回访未解决</a-button>
                   </div>
                 </div>
                 <a-alert
@@ -461,6 +536,11 @@ onMounted(load);
   border: 1px solid #bae6fd;
   border-radius: 16px;
   padding: 12px;
+}
+
+.attachment-link {
+  color: #0f766e;
+  overflow-wrap: anywhere;
 }
 
 .assist-list {

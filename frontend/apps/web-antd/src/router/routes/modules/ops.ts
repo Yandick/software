@@ -3,6 +3,7 @@ import type { RouteRecordRaw } from 'vue-router';
 const routes: RouteRecordRaw[] = [
   {
     meta: {
+      authority: ['admin', 'ops', 'auditor'],
       icon: 'lucide:bot',
       order: -10,
       title: '数字员工服务台',
@@ -16,6 +17,7 @@ const routes: RouteRecordRaw[] = [
         path: '/ops/dashboard',
         component: () => import('#/views/ops/dashboard/index.vue'),
         meta: {
+          authority: ['admin', 'ops', 'auditor'],
           affixTab: true,
           icon: 'lucide:message-circle',
           title: '智能服务台',
@@ -26,7 +28,7 @@ const routes: RouteRecordRaw[] = [
         path: '/ops/issues',
         component: () => import('#/views/ops/issues/index.vue'),
         meta: {
-          authority: ['admin', 'ops', 'user', 'auditor'],
+          authority: ['admin', 'ops', 'auditor'],
           icon: 'lucide:clipboard-list',
           title: '在线记录',
         },

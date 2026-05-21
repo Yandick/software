@@ -73,6 +73,9 @@ class AgentService:
                 "score": item.get("score", 0),
                 "source_type": item.get("source_type", ""),
                 "tags": item.get("tags", ""),
+                "snippet": item.get("snippet", ""),
+                "matched_terms": item.get("matched_terms", []),
+                "match_reason": item.get("match_reason", ""),
             }
             for item in retrieval.references
         ]
@@ -84,8 +87,10 @@ class AgentService:
                 observation={
                     "confidence": round(float(retrieval.confidence), 4),
                     "high_risk": bool(retrieval.high_risk),
+                    "query_terms": getattr(retrieval, "query_terms", []),
                     "reference_count": len(references),
                     "references": references,
+                    "strategy": getattr(retrieval, "strategy", "unknown"),
                 },
             )
         )

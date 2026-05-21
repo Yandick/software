@@ -33,6 +33,7 @@ interface ChatMessage {
   issueDraft?: Record<string, any>;
   nextActions?: any[];
   question?: string;
+  rag?: any;
   reasoningAvailable?: boolean;
   reasoningEnabled?: boolean;
   references?: any[];
@@ -230,6 +231,7 @@ async function restoreConversation(id: number) {
         needHuman: metadata.need_human,
         nextActions: metadata.next_actions || [],
         question: item.role === 'assistant' ? lastUserQuestion : item.content,
+        rag: metadata.rag,
         reasoningAvailable: !!metadata.reasoning_available,
         reasoningEnabled: !!metadata.reasoning_enabled,
         references: metadata.references || [],
@@ -305,6 +307,7 @@ async function ask(text = question.value) {
       assistantMessage.issueDraft = result.issue_draft;
       assistantMessage.nextActions = result.next_actions || [];
       assistantMessage.question = rawQuestion;
+      assistantMessage.rag = result.rag;
       assistantMessage.reasoningAvailable = !!result.reasoning_available;
       assistantMessage.reasoningEnabled = !!result.reasoning_enabled;
       assistantMessage.references = result.references || [];
@@ -616,10 +619,27 @@ onMounted(async () => {
               </div>
 
               <div v-if="item.references?.length" class="reference-box">
-                <div class="reference-title">引用知识来源</div>
-                <a-tag v-for="refItem in item.references" :key="refItem.id" color="geekblue">
-                  {{ refItem.title }} · {{ Math.round((refItem.score || 0) * 100) }}%
-                </a-tag>
+                <div class="reference-title">
+                  <span>RAG 引用证据</span>
+                  <small v-if="item.rag?.strategy">{{ item.rag.strategy }}</small>
+                </div>
+                <div v-for="refItem in item.references" :key="refItem.id" class="reference-item">
+                  <div class="reference-item-head">
+                    <strong>{{ refItem.title }}</strong>
+                    <a-tag color="geekblue">{{ Math.round((refItem.score || 0) * 100) }}%</a-tag>
+                  </div>
+                  <p v-if="refItem.snippet">{{ refItem.snippet }}</p>
+                  <div class="reference-meta">
+                    <span v-if="refItem.source_type">来源：{{ refItem.source_type }}</span>
+                    <span v-if="refItem.version">版本：v{{ refItem.version }}</span>
+                    <span v-if="refItem.match_reason">{{ refItem.match_reason }}</span>
+                  </div>
+                  <div v-if="refItem.matched_terms?.length" class="reference-terms">
+                    <a-tag v-for="term in refItem.matched_terms" :key="`${refItem.id}-${term}`" color="cyan">
+                      {{ term }}
+                    </a-tag>
+                  </div>
+                </div>
               </div>
 
               <div v-if="item.role === 'assistant' && !item.loading" class="message-actions">
@@ -959,6 +979,8 @@ onMounted(async () => {
 .reference-box {
   background: rgb(255 255 255 / 70%);
   border-radius: 16px;
+  display: grid;
+  gap: 8px;
   margin-top: 12px;
   padding: 10px;
 }
@@ -1062,9 +1084,60 @@ onMounted(async () => {
 }
 
 .reference-title {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.reference-title span {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.reference-title small {
+  color: var(--muted);
+}
+
+.reference-item {
+  background: rgb(248 250 252 / 78%);
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  padding: 9px 10px;
+}
+
+.reference-item-head,
+.reference-meta,
+.reference-terms {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reference-item-head {
+  justify-content: space-between;
+}
+
+.reference-item-head strong {
+  color: #0f172a;
+}
+
+.reference-item p {
+  color: #475569;
+  line-height: 1.55;
+  margin: 6px 0;
+}
+
+.reference-meta {
   color: var(--muted);
   font-size: 12px;
-  margin-bottom: 8px;
+}
+
+.reference-terms {
+  margin-top: 6px;
 }
 
 .message-actions {

@@ -7,7 +7,7 @@ import { defineOverridesPreferences } from '@vben/preferences';
  */
 export const overridesPreferences = defineOverridesPreferences({
   app: {
-    defaultHomePath: '/ops/dashboard',
+    defaultHomePath: '/portal',
     enableCheckUpdates: false,
     enableCopyPreferences: false,
     name: import.meta.env.VITE_APP_TITLE,

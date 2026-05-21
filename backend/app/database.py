@@ -172,6 +172,9 @@ def ensure_issue_columns(conn: sqlite3.Connection) -> None:
         "user_feedback": "text not null default ''",
         "attachment_url": "text not null default ''",
         "log_excerpt": "text not null default ''",
+        "accepted_at": "text not null default ''",
+        "handled_at": "text not null default ''",
+        "closed_at": "text not null default ''",
     }
     for name, definition in columns.items():
         if name not in existing:

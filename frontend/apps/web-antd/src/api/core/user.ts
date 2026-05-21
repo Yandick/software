@@ -7,11 +7,12 @@ import { requestClient } from '#/api/request';
  */
 export async function getUserInfoApi() {
   const user = await requestClient.get<any>('/auth/me');
+  const isPortalUser = user.role === 'user';
   return {
     ...user,
     avatar: '',
     desc: user.department,
-    homePath: '/ops/dashboard',
+    homePath: isPortalUser ? '/portal' : '/ops/dashboard',
     realName: user.real_name,
     roles: [user.role],
     userId: user.id,

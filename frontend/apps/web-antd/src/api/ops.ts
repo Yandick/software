@@ -44,6 +44,14 @@ export function uploadIssueAttachment(file: File) {
   });
 }
 
+export function acceptIssue(id: number) {
+  return requestClient.post<any>(`/issues/${id}/accept`);
+}
+
+export function changeIssueStatus(id: number, status: string, note = '') {
+  return requestClient.post<any>(`/issues/${id}/status`, { note, status });
+}
+
 export function handleIssue(id: number, solution: string) {
   return requestClient.post<any>(`/issues/${id}/handle`, { solution });
 }
@@ -122,6 +130,10 @@ export function getStats() {
 
 export function getAuditLogs(params: Record<string, any> = {}) {
   return requestClient.get<any>('/audit/logs', { params });
+}
+
+export function evaluateRag() {
+  return requestClient.get<any>('/rag/evaluate');
 }
 
 export function createDemoSession() {
