@@ -17,6 +17,8 @@ import {
 type ChatRole = 'assistant' | 'system' | 'user';
 
 interface ChatMessage {
+  agentMode?: string;
+  agentTrace?: any[];
   answer?: string;
   automationSummary?: string[];
   clarificationQuestions?: string[];
@@ -72,10 +74,10 @@ const inputRef = ref<HTMLTextAreaElement | null>(null);
 let suggestTimer: ReturnType<typeof setTimeout> | undefined;
 
 const quickActions = [
-  { query: '账号被冻结了，怎么恢复使用？', title: '账号冻结', desc: '自助解冻、热线和转人工边界' },
-  { query: 'VPN 无法连接，应该怎么排查？', title: 'VPN 故障', desc: '网络、证书、客户端版本排查' },
-  { query: '我需要申请业务系统权限，需要准备哪些信息？', title: '权限申请', desc: '字段、审批、审计要求' },
-  { query: '数据库连接失败，怎么判断影响范围？', title: '数据库连接', desc: '连接串、日志和影响范围' },
+  { query: '账号被冻结了，怎么恢复使用？', title: '账号冻结', desc: '核验原因、解冻路径与人工边界' },
+  { query: 'VPN 无法连接，应该怎么排查？', title: 'VPN 故障', desc: '网络、证书、客户端版本核查' },
+  { query: '我需要申请业务系统权限，需要准备哪些信息？', title: '权限申请', desc: '申请字段、审批链路与审计要求' },
+  { query: '数据库连接失败，怎么判断影响范围？', title: '数据库连接', desc: '连接配置、日志信息与影响范围' },
 ];
 
 function createWelcomeMessage(): ChatMessage {
@@ -83,7 +85,7 @@ function createWelcomeMessage(): ChatMessage {
     createdAt: new Date().toLocaleTimeString(),
     id: 'welcome',
     role: 'assistant',
-    text: '你好，我是云维，企业运维数字员工。请直接在下方输入你的问题，例如账号、VPN、邮箱、权限、系统慢或数据库连接失败。我会先基于私有知识库回答，必要时帮你转人工生成在线记录。',
+    text: '您好，我是云维，企业运维数字员工。请描述涉及系统、账号、错误提示和影响范围。我会基于企业知识库给出处置建议；需要人工协同时，将整理在线记录并进入运维处理流程。',
   };
 }
 
@@ -91,15 +93,15 @@ const chatMessages = ref<ChatMessage[]>([createWelcomeMessage()]);
 
 const llmModeText = computed(() => {
   if (!llmStatus.value.employee_name) return '检测中';
-  if (llmStatus.value.ready) return `本地 ${llmStatus.value.vllm_model_name} 已接入`;
-  return 'LLM 未就绪，请先启动 vLLM';
+  if (llmStatus.value.ready) return `${llmStatus.value.vllm_model_name} 已接入`;
+  return '智能服务暂未接入';
 });
 
 const visibleSuggestions = computed(() => suggestions.value.slice(0, 6));
 const visibleConversations = computed(() => conversations.value.slice(0, 8));
 
 const thinkingModeText = computed(() => {
-  if (enableThinking.value) return '深度推理';
+  if (enableThinking.value) return '增强研判';
   return '快速问答';
 });
 
@@ -197,7 +199,7 @@ function startNewConversation() {
   modelStatus.value = '';
   chatMessages.value = [createWelcomeMessage()];
   question.value = '';
-  message.success('已切换到新会话');
+  message.success('已开启新会话');
   void nextTick(() => inputRef.value?.focus());
 }
 
@@ -214,6 +216,8 @@ async function restoreConversation(id: number) {
       }
       return {
         answer: item.role === 'assistant' ? item.content : undefined,
+        agentMode: metadata.agent?.mode,
+        agentTrace: metadata.agent?.trace || [],
         automationSummary: metadata.automation_summary || [],
         clarificationQuestions: metadata.clarification_questions || [],
         confidence: metadata.confidence,
@@ -256,7 +260,7 @@ async function ask(text = question.value) {
   const rawQuestion = text.trim();
   if (!rawQuestion) {
     await loadSuggestions('');
-    message.info('请在底部输入框里描述你的问题，或点击左侧推荐查询');
+    message.info('请描述运维诉求，或选择左侧常见场景');
     return;
   }
 
@@ -277,7 +281,7 @@ async function ask(text = question.value) {
     id: assistantMessageId,
     loading: true,
     role: 'assistant',
-    text: '云维正在查询私有知识库并组织处理步骤...',
+    text: '云维正在检索企业知识库、核对风险边界并整理处置建议...',
   });
   await scrollToBottom();
 
@@ -288,6 +292,8 @@ async function ask(text = question.value) {
     const assistantMessage = chatMessages.value.find((item) => item.id === assistantMessageId);
     if (assistantMessage) {
       assistantMessage.answer = result.answer;
+      assistantMessage.agentMode = result.agent?.mode;
+      assistantMessage.agentTrace = result.agent?.trace || [];
       assistantMessage.automationSummary = result.automation_summary || [];
       assistantMessage.clarificationQuestions = result.clarification_questions || [];
       assistantMessage.confidence = result.confidence;
@@ -326,10 +332,10 @@ async function ask(text = question.value) {
       assistantMessage.needHuman = true;
       assistantMessage.question = rawQuestion;
       assistantMessage.status = 'unavailable';
-      assistantMessage.text = '数字员工暂时不可用。请确认 vLLM 已启动，或先创建在线记录让运维人员处理。';
+      assistantMessage.text = '智能服务暂时不可用。可先创建在线记录，由运维人员继续处理。';
     }
     needHuman.value = true;
-    message.error(error?.message || '数字员工请求失败');
+    message.error(error?.message || '智能服务请求失败');
   } finally {
     loading.value = false;
     await scrollToBottom();
@@ -340,7 +346,7 @@ async function transferToHuman(text = currentQuestion.value || question.value, p
   const issueText = text.trim();
   const reusableDraft = preparedDraft || currentIssueDraft.value;
   if (!issueText && !reusableDraft?.description) {
-    message.warning('请先输入问题描述，再创建在线记录');
+    message.warning('请先填写问题描述，再创建在线记录');
     return;
   }
   creatingIssue.value = true;
@@ -359,9 +365,9 @@ async function transferToHuman(text = currentQuestion.value || question.value, p
       createdAt: nowText(),
       id: `s-${Date.now()}`,
       role: 'system',
-      text: `已使用云维生成的草稿创建在线记录：分类 ${draft.category}、优先级 ${draft.priority}、影响范围 ${draft.impact_scope || '未识别'}。${missingText}\n你可以到“在线记录”页面查看处理状态，运维人员处理后会回访并沉淀知识库。`,
+      text: `已根据智能研判结果创建在线记录：分类 ${draft.category}、优先级 ${draft.priority}、影响范围 ${draft.impact_scope || '未识别'}。${missingText}\n请在“在线记录”页面跟踪处理进度；运维处理完成后将进入回访，符合条件的处理结果会沉淀为知识候选。`,
     });
-    message.success('已创建在线记录，运维人员可在“在线记录”中处理和回访');
+    message.success('在线记录已创建，可在“在线记录”页面跟进处理');
     await Promise.all([loadStats(), scrollToBottom()]);
   } finally {
     creatingIssue.value = false;
@@ -391,8 +397,8 @@ onMounted(async () => {
           <div class="avatar">云</div>
           <div>
             <div class="eyebrow">OPS AI EMPLOYEE</div>
-            <h1>和数字员工对话</h1>
-            <p>在右侧底部输入框直接提问，这是主要沟通入口。</p>
+            <h1>运维服务台</h1>
+            <p>提交问题现象，系统将结合知识库、风险边界和历史记录给出处置建议。</p>
           </div>
         </div>
 
@@ -412,7 +418,7 @@ onMounted(async () => {
             <a-tag :color="enableThinking ? 'gold' : 'blue'">{{ thinkingModeText }}</a-tag>
           </div>
           <div class="mt-3 flex items-center justify-between rounded-2xl bg-white/70 px-3 py-2">
-            <span class="text-sm text-slate-600">深度推理 / think</span>
+            <span class="text-sm text-slate-600">启用增强研判</span>
             <a-switch v-model:checked="enableThinking" />
           </div>
         </div>
@@ -421,13 +427,13 @@ onMounted(async () => {
           <div class="mb-3 flex items-center justify-between gap-2">
             <div>
               <h2>历史会话</h2>
-              <p>恢复同一个问题的上下文，继续追问或转人工。</p>
+              <p>查看已保存的咨询上下文，继续补充信息或创建在线记录。</p>
             </div>
-            <a-button size="small" @click="startNewConversation">新会话</a-button>
+            <a-button size="small" @click="startNewConversation">开启新会话</a-button>
           </div>
           <a-spin v-if="conversationLoading || restoringConversation" />
           <div v-else-if="!visibleConversations.length" class="empty-session">
-            暂无历史会话，发送第一条问题后会自动保存。
+            暂无历史会话，提交第一条问题后会自动保存。
           </div>
           <template v-else>
             <button
@@ -466,8 +472,8 @@ onMounted(async () => {
         <div class="suggest-card">
           <div class="mb-3 flex items-center justify-between">
             <div>
-              <h2>可点选的常见问题</h2>
-              <p>也可以无视这里，直接在右侧输入。</p>
+              <h2>常见服务场景</h2>
+              <p>可选择典型问题，也可以直接提交新的运维诉求。</p>
             </div>
             <a-tag v-if="suggestLoading">匹配中</a-tag>
           </div>
@@ -497,14 +503,14 @@ onMounted(async () => {
       <main class="chat-main">
         <header class="chat-header">
           <div>
-            <div class="eyebrow">CHAT WITH YUNWEI</div>
+            <div class="eyebrow">SERVICE DESK</div>
             <h2>数字员工服务台</h2>
-            <p>像 ChatGPT 一样对话：描述问题，发送，查看处理步骤；解决不了就转人工。</p>
+            <p>基于企业知识库进行自助排查；涉及权限、生产影响或信息不足时，进入在线记录与人工处理闭环。</p>
             <a-tag class="mt-2" :color="conversationId ? 'green' : 'default'">
               {{ conversationId ? `当前恢复：${conversationTitle} #${conversationId}` : '当前：新会话' }}
             </a-tag>
           </div>
-          <a-button :loading="creatingIssue" danger @click="transferToHuman()">转人工</a-button>
+          <a-button :loading="creatingIssue" danger @click="transferToHuman()">创建人工处理记录</a-button>
         </header>
 
         <div ref="chatBodyRef" class="chat-body">
@@ -530,13 +536,17 @@ onMounted(async () => {
                   知识置信度：{{ Math.round((item.confidence || 0) * 100) }}%
                 </a-tag>
                 <a-tag :color="item.reasoningEnabled ? 'gold' : 'default'">
-                  {{ item.reasoningEnabled ? '本次启用 reasoning' : '快速 no_think' }}
+                  {{ item.reasoningEnabled ? '本次启用增强研判' : '本次采用标准响应' }}
                 </a-tag>
                 <a-tag v-if="item.reasoningEnabled" :color="item.reasoningAvailable ? 'green' : 'default'">
-                  {{ item.reasoningAvailable ? '已收到 reasoning_content（不展示）' : '未检测到 reasoning_content' }}
+                  {{ item.reasoningAvailable ? '研判链路已安全留存' : '暂无额外研判链路' }}
                 </a-tag>
                 <a-tag :color="item.needHuman ? 'red' : 'green'">
-                  {{ item.needHuman ? '建议转人工' : '可先自助处理' }}
+                  {{ item.needHuman ? '建议人工协同' : '可先自助处理' }}
+                </a-tag>
+                <a-tag v-if="item.agentMode" color="geekblue">工具协同：{{ item.agentMode }}</a-tag>
+                <a-tag v-if="item.issueDraft?.extraction_source" color="processing">
+                  记录字段：{{ item.issueDraft.extraction_source }}
                 </a-tag>
               </div>
 
@@ -545,21 +555,32 @@ onMounted(async () => {
                 class="employee-decision"
               >
                 <div>
-                  <strong>云维的流程判断</strong>
-                  <span>我会同步做分类、风险识别、补字段和下一步流转建议。</span>
+                  <strong>流程研判</strong>
+                  <span>系统已同步完成分类、风险识别、信息完整性检查和后续流转建议。</span>
                 </div>
                 <div v-if="item.automationSummary?.length" class="decision-list">
-                  <span>已完成的重复工作</span>
+                  <span>研判摘要</span>
                   <ul>
                     <li v-for="summary in item.automationSummary" :key="summary">{{ summary }}</li>
                   </ul>
                 </div>
                 <div v-if="item.missingFields?.length" class="decision-row">
-                  <span>需补充</span>
+                  <span>待补充信息</span>
                   <a-tag v-for="field in item.missingFields" :key="field" color="orange">{{ field }}</a-tag>
                 </div>
+                <div v-if="item.issueDraft" class="decision-row">
+                  <span>在线记录草案</span>
+                  <a-tag color="cyan">{{ item.issueDraft.category || 'general' }}</a-tag>
+                  <a-tag color="blue">{{ item.issueDraft.priority || 'medium' }}</a-tag>
+                  <a-tag v-if="item.issueDraft.contact_phone" color="green">
+                    联系方式：{{ item.issueDraft.contact_phone }}
+                  </a-tag>
+                  <a-tag v-if="item.issueDraft.impact_scope" color="geekblue">
+                    影响：{{ item.issueDraft.impact_scope }}
+                  </a-tag>
+                </div>
                 <div v-if="item.clarificationQuestions?.length" class="decision-actions">
-                  <span>一键追问补充</span>
+                  <span>补充问题</span>
                   <button
                     v-for="clarification in item.clarificationQuestions"
                     :key="clarification"
@@ -571,16 +592,26 @@ onMounted(async () => {
                   </button>
                 </div>
                 <div v-if="item.handoffReasons?.length" class="decision-list">
-                  <span>转人工原因</span>
+                  <span>人工协同依据</span>
                   <ul>
                     <li v-for="reason in item.handoffReasons" :key="reason">{{ reason }}</li>
                   </ul>
                 </div>
                 <div v-if="item.nextActions?.length" class="decision-row">
-                  <span>下一步</span>
+                  <span>建议动作</span>
                   <a-tag v-for="action in item.nextActions" :key="action.key" :color="action.enabled ? 'blue' : 'default'">
                     {{ action.label }}
                   </a-tag>
+                </div>
+                <div v-if="item.agentTrace?.length" class="agent-trace">
+                  <span>工具调用轨迹</span>
+                  <ol>
+                    <li v-for="(step, index) in item.agentTrace" :key="`${step.phase}-${step.tool}-${index}`">
+                      <strong>{{ step.phase }}</strong>
+                      <em>{{ step.tool }}</em>
+                      <small>{{ step.thought }}</small>
+                    </li>
+                  </ol>
                 </div>
               </div>
 
@@ -592,7 +623,7 @@ onMounted(async () => {
               </div>
 
               <div v-if="item.role === 'assistant' && !item.loading" class="message-actions">
-                <a-button size="small" @click="fillQuestion(item.question || '')">追问这个问题</a-button>
+                <a-button size="small" @click="fillQuestion(item.question || '')">基于该问题继续咨询</a-button>
                 <a-button
                   v-if="item.needHuman"
                   :loading="creatingIssue"
@@ -600,7 +631,7 @@ onMounted(async () => {
                   size="small"
                   @click="transferToHuman(item.question || '', item.issueDraft)"
                 >
-                  用云维草稿转人工
+                  使用草案创建在线记录
                 </a-button>
               </div>
             </article>
@@ -609,10 +640,10 @@ onMounted(async () => {
 
         <footer class="composer">
           <div class="composer-hint">
-            <strong>在这里和数字员工沟通</strong>
-            <span>输入系统名称、账号、错误提示、影响范围；Enter 发送，Shift+Enter 换行。</span>
+            <strong>描述运维诉求</strong>
+            <span>建议包含系统名称、账号、错误提示和影响范围；Enter 提交，Shift+Enter 换行。</span>
           </div>
-          <label class="input-label" for="ops-chat-input">问题输入框</label>
+          <label class="input-label" for="ops-chat-input">运维问题描述</label>
           <textarea
             id="ops-chat-input"
             ref="inputRef"
@@ -639,7 +670,7 @@ onMounted(async () => {
                 {{ creatingIssue ? '创建中...' : '创建在线记录' }}
               </button>
               <button class="primary-send" :disabled="loading" type="button" @click="ask()">
-                {{ loading ? '发送中...' : '发送给云维' }}
+                {{ loading ? '分析中...' : '提交咨询' }}
               </button>
             </div>
           </div>
@@ -954,12 +985,14 @@ onMounted(async () => {
 
 .decision-row,
 .decision-list,
+.agent-trace,
 .decision-actions {
   margin-top: 10px;
 }
 
 .decision-row > span,
 .decision-list > span,
+.agent-trace > span,
 .decision-actions > span {
   color: var(--accent-strong);
   font-size: 12px;
@@ -970,6 +1003,46 @@ onMounted(async () => {
 .decision-list ul {
   margin: 4px 0 0 18px;
   padding: 0;
+}
+
+.agent-trace ol {
+  counter-reset: react-step;
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.agent-trace li {
+  align-items: center;
+  background: rgb(255 255 255 / 74%);
+  border: 1px solid #ccfbf1;
+  border-radius: 12px;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: 64px 120px minmax(0, 1fr);
+  list-style: none;
+  padding: 8px 10px;
+}
+
+.agent-trace strong,
+.agent-trace em,
+.agent-trace small {
+  display: block;
+}
+
+.agent-trace strong {
+  color: #0f766e;
+}
+
+.agent-trace em {
+  color: #a16207;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.agent-trace small {
+  color: var(--muted);
 }
 
 .clarify-button {

@@ -48,14 +48,14 @@ const formSchema = computed((): VbenFormSchema[] => {
     :show-qrcode-login="false"
     :show-register="false"
     :show-third-party-login="false"
-    sub-title="请使用系统演示账号登录，第三方登录与注册入口当前未启用"
+    sub-title="请使用已分配的系统账号登录，所有操作均按角色权限和审计规则执行"
     submit-button-text="登录运维数字员工系统"
     title="运维数字员工系统"
     @submit="authStore.authLogin"
   >
     <template #to-register>
       <div class="mt-4 rounded-lg bg-muted px-4 py-3 text-sm leading-6">
-        <div class="font-medium">演示账号</div>
+        <div class="font-medium">内置体验账号</div>
         <div>管理员：admin / admin123</div>
         <div>运维人员：ops / ops123</div>
         <div>普通用户：user / user123</div>

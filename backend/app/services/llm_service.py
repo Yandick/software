@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -16,6 +17,13 @@ class LLMService:
         thinking = settings.enable_thinking if enable_thinking is None else enable_thinking
         messages = self._build_messages(question, context, thinking)
         return self._generate_vllm(messages, thinking)
+
+    def extract_issue_draft(self, description: str, rule_draft: dict[str, Any]) -> dict[str, Any]:
+        """Extract a structured issue draft with Qwen and merge it with rule fallback."""
+        messages = self._build_issue_extract_messages(description, rule_draft)
+        result = self._generate_vllm(messages, thinking=False)
+        parsed = self._parse_json_object(result["content"])
+        return self._normalize_issue_draft(description, rule_draft, parsed, result.get("status", "vllm"))
 
     def status(self) -> dict[str, Any]:
         settings = get_settings()
@@ -66,6 +74,36 @@ class LLMService:
         user = f"{mode_hint}\nKnowledge-base context:\n{context or 'No available context'}\n\nUser question:\n{question}"
         return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
+    def _build_issue_extract_messages(self, description: str, rule_draft: dict[str, Any]) -> list[dict[str, str]]:
+        system = (
+            "You are an enterprise IT operations ticket-field extractor. "
+            "Extract only facts present in the user's Chinese issue description. "
+            "Do not invent account names, phone numbers, URLs, logs, systems, impact scope, or priority. "
+            "Return one JSON object only, with no markdown and no explanation. "
+            "Allowed category values: account, network, business, database, general. "
+            "Allowed priority values: low, medium, high. "
+            "Allowed missing_fields values: 联系方式, 影响范围, 截图/附件链接, 错误日志或报错原文."
+        )
+        schema = {
+            "title": "short ticket title, max 60 Chinese chars",
+            "description": "original or concise issue description",
+            "category": "account|network|business|database|general",
+            "priority": "low|medium|high",
+            "impact_scope": "affected users/scope if explicitly stated",
+            "contact_phone": "phone or contact method if explicitly stated",
+            "attachment_url": "URL/file path/share path if explicitly stated",
+            "log_excerpt": "error/log lines if explicitly stated",
+            "missing_fields": ["missing field labels from the allowed list"],
+            "confidence": "number from 0 to 1",
+        }
+        user = (
+            "/no_think\n"
+            f"User issue description:\n{description.strip()}\n\n"
+            f"Rule fallback draft:\n{json.dumps(rule_draft, ensure_ascii=False)}\n\n"
+            f"Required JSON schema:\n{json.dumps(schema, ensure_ascii=False)}"
+        )
+        return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
     def _sampling(self, thinking: bool) -> dict[str, Any]:
         if thinking:
             return {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0, "presence_penalty": 1.1}
@@ -109,6 +147,81 @@ class LLMService:
         reasoning = match.group(1).strip()
         content = (text[: match.start()] + text[match.end() :]).strip()
         return content, reasoning
+
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", cleaned, flags=re.S)
+            if not match:
+                raise RuntimeError("issue_extract_json_not_found") from None
+            data = json.loads(match.group(0))
+        if not isinstance(data, dict):
+            raise RuntimeError("issue_extract_json_not_object")
+        return data
+
+    def _normalize_issue_draft(
+        self,
+        description: str,
+        rule_draft: dict[str, Any],
+        parsed: dict[str, Any],
+        status: str,
+    ) -> dict[str, Any]:
+        categories = {"account", "network", "business", "database", "general"}
+        priorities = {"low", "medium", "high"}
+        allowed_missing = ["联系方式", "影响范围", "截图/附件链接", "错误日志或报错原文"]
+
+        def text_value(key: str, limit: int = 1000) -> str:
+            value = parsed.get(key)
+            if value is None or value == "":
+                value = rule_draft.get(key, "")
+            return str(value).strip()[:limit]
+
+        category = str(parsed.get("category") or rule_draft.get("category") or "general").strip()
+        if category not in categories:
+            category = str(rule_draft.get("category") or "general")
+        priority = str(parsed.get("priority") or rule_draft.get("priority") or "medium").strip()
+        if priority not in priorities:
+            priority = str(rule_draft.get("priority") or "medium")
+
+        raw_missing = parsed.get("missing_fields")
+        missing_fields = [item for item in raw_missing if item in allowed_missing] if isinstance(raw_missing, list) else []
+
+        draft = {
+            **rule_draft,
+            "title": text_value("title", 60) or rule_draft.get("title") or "在线记录",
+            "description": description.strip(),
+            "category": category,
+            "priority": priority,
+            "impact_scope": text_value("impact_scope", 200),
+            "contact_phone": text_value("contact_phone", 80),
+            "attachment_url": text_value("attachment_url", 500),
+            "log_excerpt": text_value("log_excerpt", 1000),
+            "missing_fields": missing_fields,
+            "confidence": self._clamp_float(parsed.get("confidence"), float(rule_draft.get("confidence", 0.5))),
+            "extraction_source": "llm",
+            "llm_status": status,
+        }
+        for field, key in [
+            ("联系方式", "contact_phone"),
+            ("影响范围", "impact_scope"),
+            ("截图/附件链接", "attachment_url"),
+            ("错误日志或报错原文", "log_excerpt"),
+        ]:
+            if not draft.get(key) and field not in draft["missing_fields"]:
+                draft["missing_fields"].append(field)
+        return draft
+
+    def _clamp_float(self, value: Any, fallback: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = fallback
+        return round(max(0.0, min(1.0, number)), 4)
 
 
 llm_service = LLMService()

@@ -224,7 +224,7 @@ onMounted(load);
       v-if="!canHandle"
       class="mb-5"
       message="我的处理状态"
-      description="这里会自动只显示你自己提交的在线记录。你可以按标题、描述、分类或影响范围搜索，记录关闭后可提交满意度评价。"
+      description="系统仅展示当前账号可访问的在线记录。可按标题、描述、分类或影响范围检索，记录关闭后支持提交满意度评价。"
       show-icon
       type="info"
     />
@@ -347,7 +347,7 @@ onMounted(load);
                     生成处理辅助
                   </a-button>
                   <div v-if="assistMap[item.id]" class="assist-box mb-4">
-                    <div class="font-semibold text-slate-800">AI 处理辅助</div>
+                    <div class="font-semibold text-slate-800">智能处理辅助</div>
                     <a-alert class="mt-2" type="info" show-icon :message="assistMap[item.id].summary" />
                     <div v-if="assistMap[item.id].missing_fields?.length" class="mt-3">
                       <span class="text-sm text-slate-500">建议补充：</span>

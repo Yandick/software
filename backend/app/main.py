@@ -31,6 +31,7 @@ from .schemas import (
     QuestionRequest,
 )
 from .security import create_access_token, current_user, verify_password
+from .services.agent_service import agent_service
 from .services.llm_service import llm_service
 from .services.rag_service import RagService
 
@@ -52,6 +53,22 @@ ACCOUNT_UPDATE_FIELDS = {
     "remark",
     "status",
 }
+DEMO_QUESTION = "VPN 无法连接，提示证书过期，影响远程办公，电话 13800138000"
+DEMO_STEPS = [
+    "user_ask",
+    "agent_review",
+    "agent_handoff",
+    "create_issue",
+    "ops_accept",
+    "ops_assist",
+    "ops_handle",
+    "user_confirm",
+    "visit_and_feedback",
+    "knowledge_review",
+    "publish_knowledge",
+    "audit_summary",
+]
+DEMO_SESSIONS: dict[str, dict[str, Any]] = {}
 ISSUE_CATEGORY_KEYWORDS = {
     "account": ["账号", "密码", "登录", "权限", "冻结", "解冻", "用户"],
     "network": ["vpn", "网络", "连接", "证书", "远程", "wifi", "专线"],
@@ -98,7 +115,7 @@ def validate_knowledge_payload(data: KnowledgeCreate | KnowledgeStatusUpdate) ->
         raise HTTPException(status_code=400, detail="知识来源类型不合法")
 
 
-def build_issue_draft(description: str) -> dict[str, Any]:
+def build_issue_draft_by_rules(description: str) -> dict[str, Any]:
     text = description.strip()
     lowered = text.lower()
     category = "general"
@@ -154,11 +171,31 @@ def build_issue_draft(description: str) -> dict[str, Any]:
         "log_excerpt": "\n".join(log_lines)[:1000],
         "missing_fields": missing_fields,
         "confidence": 0.78 if category != "general" else 0.52,
+        "extraction_source": "rules",
     }
 
 
-def build_employee_decision(question: str, retrieval: Any, references: list[dict[str, Any]]) -> dict[str, Any]:
-    draft = build_issue_draft(question)
+def build_issue_draft(description: str, use_llm: bool = True) -> dict[str, Any]:
+    rule_draft = build_issue_draft_by_rules(description)
+    if not use_llm:
+        return rule_draft
+    try:
+        return llm_service.extract_issue_draft(description, rule_draft)
+    except RuntimeError as exc:
+        return {
+            **rule_draft,
+            "extraction_source": "rules_fallback",
+            "extraction_error": str(exc).split(":", 1)[0],
+        }
+
+
+def build_employee_decision(
+    question: str,
+    retrieval: Any,
+    references: list[dict[str, Any]],
+    draft: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    draft = draft or build_issue_draft(question)
     if retrieval.high_risk:
         risk_level = "high"
     elif draft["priority"] == "high":
@@ -236,6 +273,11 @@ def build_employee_decision(question: str, retrieval: Any, references: list[dict
             "contact_phone": draft["contact_phone"],
             "attachment_url": draft["attachment_url"],
             "log_excerpt": draft["log_excerpt"],
+            "missing_fields": draft["missing_fields"],
+            "confidence": draft.get("confidence", 0),
+            "extraction_source": draft.get("extraction_source", "rules"),
+            "extraction_error": draft.get("extraction_error", ""),
+            "llm_status": draft.get("llm_status", ""),
         },
     }
 
@@ -404,11 +446,19 @@ def load_qa_conversation(conn: Any, conversation_id: int, user: dict[str, Any]) 
     return row
 
 
+def load_qa_conversation_for_write(conn: Any, conversation_id: int, user: dict[str, Any]) -> Any:
+    row = conn.execute("select * from qa_conversations where id=?", (conversation_id,)).fetchone()
+    ensure_row_exists(row, "数字员工会话")
+    if row["user_id"] != user.get("id"):
+        raise HTTPException(status_code=403, detail="只能继续自己的数字员工会话；管理、运维和审计查看他人会话为只读")
+    return row
+
+
 def prepare_qa_conversation(data: QuestionRequest, user: dict[str, Any]) -> tuple[int, str]:
     now = utc_now()
     with connect() as conn:
         if data.conversation_id:
-            row = load_qa_conversation(conn, data.conversation_id, user)
+            row = load_qa_conversation_for_write(conn, data.conversation_id, user)
             conversation_id = int(row["id"])
             conn.execute("update qa_conversations set updated_at=? where id=?", (now, conversation_id))
         else:
@@ -431,6 +481,29 @@ def prepare_qa_conversation(data: QuestionRequest, user: dict[str, Any]) -> tupl
         return conversation_id, data.question
     history_text = "\n".join(f"{row['role']}: {row['content'][:500]}" for row in history)
     return conversation_id, f"历史对话：\n{history_text}\n\n当前用户补充/问题：\n{data.question}"
+
+
+def extract_attachment_ids(attachment_url: str) -> list[int]:
+    ids = re.findall(r"/api/issues/attachments/(\d+)/download", attachment_url or "")
+    return sorted({int(item) for item in ids})
+
+
+def validate_issue_attachment_refs(conn: Any, attachment_url: str, user: dict[str, Any]) -> None:
+    if not attachment_url:
+        return
+    for attachment_id in extract_attachment_ids(attachment_url):
+        row = conn.execute("select uploaded_by,issue_id from issue_attachments where id=?", (attachment_id,)).fetchone()
+        ensure_row_exists(row, "附件")
+        if row["uploaded_by"] != user.get("id") or row["issue_id"] is not None:
+            raise HTTPException(status_code=403, detail="只能关联自己上传且尚未绑定工单的附件")
+
+
+def bind_issue_attachments(conn: Any, issue_id: int, attachment_url: str, user: dict[str, Any]) -> None:
+    for attachment_id in extract_attachment_ids(attachment_url):
+        conn.execute(
+            "update issue_attachments set issue_id=? where id=? and uploaded_by=? and issue_id is null",
+            (issue_id, attachment_id, user.get("id")),
+        )
 
 
 def write_qa_message(conversation_id: int, role: str, content: str, metadata: dict[str, Any] | None = None) -> None:
@@ -505,6 +578,453 @@ def llm_status(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     return llm_service.status()
 
 
+@app.get("/api/agent/status")
+def agent_status(_: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return agent_service.status()
+
+
+def create_demo_state() -> dict[str, Any]:
+    session_id = uuid.uuid4().hex[:8]
+    prefix = f"[DEMO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{session_id}]"
+    return {
+        "id": session_id,
+        "prefix": prefix,
+        "question": DEMO_QUESTION,
+        "status": "ready",
+        "step_index": 0,
+        "steps": DEMO_STEPS,
+        "timeline": [
+            {
+                "role": "system",
+                "title": "演示会话已创建",
+                "detail": "准备按 VPN 证书过期剧本演示自助问答、转人工、处理回访、知识沉淀和审计闭环。",
+                "status": "done",
+                "created_at": utc_now(),
+            }
+        ],
+        "user_window": {"messages": []},
+        "agent_window": {"trace": [], "draft": {}, "answer": "", "decision": {}},
+        "ops_window": {"issue": {}, "assist": {}, "solution": ""},
+        "admin_window": {"knowledge": {}, "audit": [], "stats": {}},
+    }
+
+
+def demo_event(state: dict[str, Any], role: str, title: str, detail: str, status: str = "done") -> None:
+    state["timeline"].append(
+        {
+            "role": role,
+            "title": title,
+            "detail": detail,
+            "status": status,
+            "created_at": utc_now(),
+        }
+    )
+
+
+@app.post("/api/demo/session")
+def create_demo_session(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_roles(user, {"admin"})
+    state = create_demo_state()
+    DEMO_SESSIONS[state["id"]] = state
+    audit("demo_session_create", "demo", f"创建四宫格验收 Demo：{state['prefix']}")
+    return state
+
+
+@app.get("/api/demo/session/{session_id}")
+def get_demo_session(session_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_roles(user, {"admin", "ops"})
+    state = DEMO_SESSIONS.get(session_id)
+    ensure_row_exists(state, "Demo 会话")
+    return state
+
+
+@app.post("/api/demo/session/{session_id}/step")
+def run_demo_step(session_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_roles(user, {"admin"})
+    state = DEMO_SESSIONS.get(session_id)
+    ensure_row_exists(state, "Demo 会话")
+    if state.get("running_step"):
+        return state
+    if state["step_index"] >= len(DEMO_STEPS):
+        state["status"] = "finished"
+        return state
+
+    step = DEMO_STEPS[state["step_index"]]
+    state["running_step"] = step
+    try:
+        if step == "user_ask":
+            run_demo_user_ask(state, user)
+        elif step == "agent_review":
+            run_demo_agent_review(state)
+        elif step == "agent_handoff":
+            run_demo_agent_handoff(state)
+        elif step == "create_issue":
+            run_demo_create_issue(state, user)
+        elif step == "ops_accept":
+            run_demo_ops_accept(state, user)
+        elif step == "ops_assist":
+            run_demo_ops_assist(state, user)
+        elif step == "ops_handle":
+            run_demo_ops_handle(state, user)
+        elif step == "user_confirm":
+            run_demo_user_confirm(state)
+        elif step == "visit_and_feedback":
+            run_demo_visit_and_feedback(state, user)
+        elif step == "knowledge_review":
+            run_demo_knowledge_review(state)
+        elif step == "publish_knowledge":
+            run_demo_publish_knowledge(state, user)
+        elif step == "audit_summary":
+            run_demo_audit_summary(state)
+        else:
+            raise HTTPException(status_code=400, detail="未知 Demo 步骤")
+
+        state["step_index"] += 1
+        state["status"] = "finished" if state["step_index"] >= len(DEMO_STEPS) else "running"
+        return state
+    finally:
+        state["running_step"] = ""
+
+
+@app.post("/api/demo/session/{session_id}/reset")
+def reset_demo_session(session_id: str, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_roles(user, {"admin"})
+    if session_id not in DEMO_SESSIONS:
+        raise HTTPException(status_code=404, detail="Demo 会话不存在")
+    old_state = DEMO_SESSIONS.pop(session_id, None)
+    state = create_demo_state()
+    if old_state:
+        demo_event(state, "system", "演示已重置", f"旧 Demo 会话 {session_id} 已清理，已创建新会话。")
+    DEMO_SESSIONS[state["id"]] = state
+    return state
+
+
+def run_demo_user_ask(state: dict[str, Any], user: dict[str, Any]) -> None:
+    if state.get("conversation_id"):
+        return
+    question = state["question"]
+    retrieval = rag_service.search(question)
+    draft = build_issue_draft(question)
+    agent_result = agent_service.run(question, rag_service, build_issue_draft, retrieval, draft)
+    context = rag_service.build_context(retrieval.references)
+    try:
+        model_result = llm_service.generate(question, context, False)
+    except RuntimeError:
+        model_result = {
+            "content": "演示兜底回答：已命中 VPN/证书相关知识。建议先检查 VPN 客户端证书有效期、重新登录客户端；如仍失败，请创建在线记录并附上错误截图或日志。",
+            "status": "demo-fallback",
+            "reasoning_enabled": False,
+            "reasoning_available": False,
+        }
+    refs = [{"id": item["id"], "title": item["title"], "tags": item.get("tags", ""), "score": item.get("score", 0)} for item in retrieval.references]
+    decision = build_employee_decision(question, retrieval, refs, draft)
+    answer = str(model_result["content"])
+    now = utc_now()
+    with connect() as conn:
+        conn.execute(
+            "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
+            (f"{state['prefix']} {question}", answer, int(decision["need_human"]), model_result.get("status", "unknown"), json.dumps(refs, ensure_ascii=False), now),
+        )
+        cur = conn.execute(
+            "insert into qa_conversations(user_id,title,status,created_at,updated_at) values(?,?,?,?,?)",
+            (user.get("id"), f"{state['prefix']} VPN 闭环演示", "active", now, now),
+        )
+        conversation_id = int(cur.lastrowid)
+    write_qa_message(conversation_id, "user", question)
+    write_qa_message(
+        conversation_id,
+        "assistant",
+        answer,
+        {
+            "agent": agent_result,
+            "automation_summary": decision["automation_summary"],
+            "confidence": decision["confidence"],
+            "handoff_reasons": decision["handoff_reasons"],
+            "issue_draft": decision["issue_draft"],
+            "missing_fields": decision["missing_fields"],
+            "model_status": model_result.get("status", "unknown"),
+            "need_human": decision["need_human"],
+            "next_actions": decision["next_actions"],
+            "references": refs,
+            "risk_level": decision["risk_level"],
+        },
+    )
+    state["conversation_id"] = conversation_id
+    state["user_window"]["messages"] = [
+        {"role": "user", "content": question},
+        {"role": "assistant", "content": answer, "references": refs},
+    ]
+    state["agent_window"] = {
+        "answer": answer,
+        "decision": decision,
+        "draft": decision["issue_draft"],
+        "references": refs,
+        "trace": agent_result["trace"],
+        "tools_used": agent_result["tools_used"],
+        "model_status": model_result.get("status", "unknown"),
+    }
+    demo_event(state, "agent", "数字员工完成自助问答", f"已执行 {len(agent_result['trace'])} 个 ReAct 步骤，抽取来源：{decision['issue_draft'].get('extraction_source', 'rules')}。")
+
+
+def run_demo_agent_review(state: dict[str, Any]) -> None:
+    if state["agent_window"].get("review_done"):
+        return
+    if not state.get("conversation_id"):
+        raise HTTPException(status_code=400, detail="请先完成用户提问")
+    references = state["agent_window"].get("references", [])
+    decision = state["agent_window"].get("decision", {})
+    state["agent_window"]["review_done"] = True
+    state["agent_window"]["review"] = {
+        "confidence": decision.get("confidence", 0),
+        "handoff_reasons": decision.get("handoff_reasons", []),
+        "matched_references": [item.get("title", "") for item in references[:3]],
+        "risk_level": decision.get("risk_level", "medium"),
+    }
+    demo_event(
+        state,
+        "agent",
+        "知识命中与风险复核",
+        f"命中 {len(references)} 条 VPN/证书知识，风险级别 {decision.get('risk_level', 'medium')}，判断需要人工核实证书状态。",
+    )
+
+
+def run_demo_agent_handoff(state: dict[str, Any]) -> None:
+    if state["agent_window"].get("handoff_done"):
+        return
+    draft = state["agent_window"].get("draft")
+    if not draft:
+        raise HTTPException(status_code=400, detail="请先完成 Agent 字段抽取")
+    handoff = (
+        "我已整理好转人工信息：问题类型=VPN/网络，优先级=高，影响范围=远程办公，"
+        f"联系方式={draft.get('contact_phone') or '待补充'}。是否为你创建在线记录？"
+    )
+    state["agent_window"]["handoff_done"] = True
+    state["agent_window"]["handoff_script"] = handoff
+    state["user_window"].setdefault("messages", []).append({"role": "assistant", "content": handoff})
+    demo_event(state, "agent", "生成转人工话术", "已把问题字段、风险原因和待补充信息整理成可审计的转人工交接单。")
+
+
+def run_demo_create_issue(state: dict[str, Any], user: dict[str, Any]) -> None:
+    if state.get("issue_id"):
+        return
+    draft = state["agent_window"].get("draft") or build_issue_draft_by_rules(state["question"])
+    now = utc_now()
+    title = f"{state['prefix']} {draft.get('title') or 'VPN 证书过期无法连接'}"
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            insert into issues(
+              title,description,contact_phone,priority,status,created_at,updated_at,
+              created_by,requester_name,category,impact_scope,attachment_url,log_excerpt
+            ) values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                title,
+                draft.get("description") or state["question"],
+                draft.get("contact_phone", ""),
+                draft.get("priority", "medium"),
+                "pending",
+                now,
+                now,
+                user["id"],
+                "演示用户",
+                draft.get("category", "network"),
+                draft.get("impact_scope", ""),
+                draft.get("attachment_url", ""),
+                draft.get("log_excerpt", ""),
+            ),
+        )
+        issue_id = int(cur.lastrowid)
+        issue_event(conn, issue_id, "created", {"id": user["id"], "real_name": "演示用户"}, f"Demo 创建在线记录：{title}")
+    audit("demo_issue_create", "issue", f"{state['prefix']} Demo 创建在线记录：{title}", issue_id)
+    state["issue_id"] = issue_id
+    state["ops_window"]["issue"] = {"id": issue_id, "title": title, "status": "pending", **draft}
+    demo_event(state, "user", "用户一键转人工", f"已使用云维草稿创建在线记录 #{issue_id}。")
+
+
+def run_demo_ops_accept(state: dict[str, Any], user: dict[str, Any]) -> None:
+    issue_id = int(state.get("issue_id") or 0)
+    if not issue_id:
+        raise HTTPException(status_code=400, detail="请先创建 Demo 在线记录")
+    if state["ops_window"].get("accepted"):
+        return
+    now = utc_now()
+    with connect() as conn:
+        issue_event(conn, issue_id, "accepted", {"id": user["id"], "real_name": "演示运维"}, "运维人员接单，开始核验 VPN 证书与客户端状态。")
+        conn.execute("update issues set handled_by=?,updated_at=? where id=?", (user["id"], now, issue_id))
+    audit("demo_issue_accept", "issue", f"{state['prefix']} Demo 运维接单", issue_id)
+    state["ops_window"]["accepted"] = True
+    state["ops_window"]["issue"] = {**state["ops_window"].get("issue", {}), "status": "processing"}
+    demo_event(state, "ops", "运维人员接单", "运维人员接收在线记录，确认影响远程办公，开始核验账号、证书和客户端版本。")
+
+
+def run_demo_ops_assist(state: dict[str, Any], user: dict[str, Any]) -> None:
+    issue_id = int(state.get("issue_id") or 0)
+    if not issue_id:
+        raise HTTPException(status_code=400, detail="请先创建 Demo 在线记录")
+    if state["ops_window"].get("assist"):
+        return
+    with connect() as conn:
+        row = conn.execute(
+            """
+            select i.*, u.real_name as created_by_name
+            from issues i
+            left join users u on u.id = i.created_by
+            where i.id=?
+            """,
+            (issue_id,),
+        ).fetchone()
+    ensure_row_exists(row, "在线记录")
+    issue = dict(row)
+    retrieval = rag_service.search(f"{issue.get('title', '')} {issue.get('description', '')} {issue.get('category', '')}", limit=5)
+    assist = build_issue_assist(issue, retrieval.references)
+    with connect() as conn:
+        issue_event(conn, issue_id, "assist_generated", {"id": user["id"], "real_name": "演示运维"}, "已生成 AI 处理辅助、缺失字段检查和回访话术。")
+    audit("demo_issue_assist", "issue", f"{state['prefix']} Demo 生成处理辅助", issue_id)
+    state["ops_window"]["assist"] = assist
+    demo_event(state, "ops", "生成 AI 处理辅助", "系统给出证书刷新、客户端重登、账号状态核验、回访确认等处理建议。")
+
+
+def run_demo_ops_handle(state: dict[str, Any], user: dict[str, Any]) -> None:
+    issue_id = int(state.get("issue_id") or 0)
+    if not issue_id:
+        raise HTTPException(status_code=400, detail="请先创建 Demo 在线记录")
+    if state["ops_window"].get("solution"):
+        return
+    with connect() as conn:
+        row = conn.execute(
+            """
+            select i.*, u.real_name as created_by_name
+            from issues i
+            left join users u on u.id = i.created_by
+            where i.id=?
+            """,
+            (issue_id,),
+        ).fetchone()
+    ensure_row_exists(row, "在线记录")
+    issue = dict(row)
+    assist = state["ops_window"].get("assist")
+    if not assist:
+        retrieval = rag_service.search(f"{issue.get('title', '')} {issue.get('description', '')} {issue.get('category', '')}", limit=5)
+        assist = build_issue_assist(issue, retrieval.references)
+    solution = "演示处理结果：已核对 VPN 客户端证书缓存，指导用户重新登录并刷新证书链；用户远程办公连接恢复。"
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("update issues set solution=?,status='handled',handled_by=?,updated_at=? where id=?", (solution, user["id"], now, issue_id))
+        issue_event(conn, issue_id, "handled", {"id": user["id"], "real_name": "演示运维"}, solution)
+    audit("demo_issue_handle", "issue", f"{state['prefix']} Demo 运维处理：{solution}", issue_id)
+    state["ops_window"]["issue"] = {**state["ops_window"].get("issue", {}), "status": "handled"}
+    state["ops_window"]["assist"] = assist
+    state["ops_window"]["solution"] = solution
+    demo_event(state, "ops", "运维处理完成", "已生成处理辅助、推荐知识和回访话术，并提交处理结果。")
+
+
+def run_demo_user_confirm(state: dict[str, Any]) -> None:
+    if state["user_window"].get("confirmed"):
+        return
+    if not state["ops_window"].get("solution"):
+        raise HTTPException(status_code=400, detail="请先完成运维处理")
+    state["user_window"]["confirmed"] = True
+    state["user_window"].setdefault("messages", []).append(
+        {
+            "role": "user",
+            "content": "我已按运维建议重新登录 VPN，证书刷新后可以连接了，远程办公恢复正常。",
+        }
+    )
+    demo_event(state, "user", "用户确认恢复", "用户确认 VPN 已恢复连接，远程办公影响解除，进入回访和满意度评价。")
+
+
+def run_demo_visit_and_feedback(state: dict[str, Any], user: dict[str, Any]) -> None:
+    issue_id = int(state.get("issue_id") or 0)
+    if not issue_id:
+        raise HTTPException(status_code=400, detail="请先创建 Demo 在线记录")
+    if state.get("knowledge_id"):
+        return
+    now = utc_now()
+    visit_result = "演示回访：用户确认 VPN 已恢复，远程办公正常，满意度 5 分。"
+    with connect() as conn:
+        conn.execute(
+            """
+            update issues set resolved=1,satisfaction_score=5,visit_result=?,status='closed',
+              visited_by=?,user_satisfaction_score=5,user_feedback=?,updated_at=?
+            where id=?
+            """,
+            (visit_result, user["id"], "问题已解决，处理及时。", now, issue_id),
+        )
+        issue_event(conn, issue_id, "visited", {"id": user["id"], "real_name": "演示运维"}, visit_result)
+        row = conn.execute("select title,description,solution,category,log_excerpt from issues where id=?", (issue_id,)).fetchone()
+        ensure_row_exists(row, "在线记录")
+        content = f"问题现象：{row['description']}\n\n处理结果：{row['solution']}\n\n回访结论：{visit_result}"
+        cur = conn.execute(
+            "insert into knowledge(title,content,tags,source_type,status,created_at,updated_at) values(?,?,?,?,?,?,?)",
+            (f"{state['prefix']} VPN 证书过期处理案例", content, "VPN,证书,处理案例,Demo", "case", "pending_review", now, now),
+        )
+        knowledge_id = int(cur.lastrowid)
+        issue_event(conn, issue_id, "knowledge_candidate", {"id": user["id"], "real_name": "演示运维"}, f"已生成待审核知识候选 #{knowledge_id}")
+    audit("demo_issue_visit", "issue", f"{state['prefix']} Demo 回访确认已解决", issue_id)
+    audit("demo_knowledge_candidate", "knowledge", f"{state['prefix']} Demo 生成知识候选", knowledge_id)
+    state["knowledge_id"] = knowledge_id
+    state["ops_window"]["issue"] = {**state["ops_window"].get("issue", {}), "status": "closed", "satisfaction_score": 5}
+    state["admin_window"]["knowledge"] = {"id": knowledge_id, "title": f"{state['prefix']} VPN 证书过期处理案例", "status": "pending_review"}
+    demo_event(state, "ops", "回访与知识候选完成", f"用户确认已解决，满意度 5 分；生成待审核知识候选 #{knowledge_id}。")
+
+
+def run_demo_knowledge_review(state: dict[str, Any]) -> None:
+    knowledge_id = int(state.get("knowledge_id") or 0)
+    if not knowledge_id:
+        raise HTTPException(status_code=400, detail="请先生成 Demo 知识候选")
+    if state["admin_window"].get("knowledge_reviewed"):
+        return
+    state["admin_window"]["knowledge_reviewed"] = True
+    state["admin_window"]["knowledge"] = {
+        **state["admin_window"].get("knowledge", {}),
+        "review_notes": "已核对问题现象、处理步骤、回访结论和审计记录，符合发布条件。",
+    }
+    demo_event(state, "admin", "管理员审核知识候选", f"管理员复核知识候选 #{knowledge_id}，确认可沉淀为 VPN 证书过期处理案例。")
+
+
+def run_demo_publish_knowledge(state: dict[str, Any], user: dict[str, Any]) -> None:
+    knowledge_id = int(state.get("knowledge_id") or 0)
+    if not knowledge_id:
+        raise HTTPException(status_code=400, detail="请先生成 Demo 知识候选")
+    if state["admin_window"].get("knowledge", {}).get("status") == "published":
+        return
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute("select title,status from knowledge where id=?", (knowledge_id,)).fetchone()
+        ensure_row_exists(row, "知识条目")
+        conn.execute("update knowledge set status='published',updated_at=? where id=?", (now, knowledge_id))
+    audit("demo_knowledge_publish", "knowledge", f"{state['prefix']} Demo 管理员发布知识：{row['title']}", knowledge_id)
+    state["admin_window"]["knowledge"] = {"id": knowledge_id, "title": row["title"], "status": "published", "updated_at": now}
+    demo_event(state, "admin", "管理员审核发布知识", f"知识候选 #{knowledge_id} 已发布，后续同类问题可进入 RAG 检索。")
+
+
+def run_demo_audit_summary(state: dict[str, Any]) -> None:
+    if state["admin_window"].get("audit"):
+        return
+    with connect() as conn:
+        audit_rows = conn.execute(
+            "select * from audit_logs where content like ? order by id desc limit 12",
+            (f"%{state['prefix']}%",),
+        ).fetchall()
+        qa_rows = conn.execute(
+            "select * from qa_logs where question like ? order by id desc limit 5",
+            (f"%{state['prefix']}%",),
+        ).fetchall()
+        stats_snapshot = {
+            "qa_logs": conn.execute("select count(*) from qa_logs").fetchone()[0],
+            "issues": conn.execute("select count(*) from issues").fetchone()[0],
+            "closed_issues": conn.execute("select count(*) from issues where status='closed'").fetchone()[0],
+            "pending_knowledge": conn.execute("select count(*) from knowledge where status='pending_review'").fetchone()[0],
+            "published_knowledge": conn.execute("select count(*) from knowledge where status='published'").fetchone()[0],
+            "audit_logs": conn.execute("select count(*) from audit_logs").fetchone()[0],
+        }
+    state["admin_window"]["audit"] = rows_to_dicts(audit_rows)
+    state["admin_window"]["qa_logs"] = rows_to_dicts(qa_rows)
+    state["admin_window"]["stats"] = stats_snapshot
+    demo_event(state, "auditor", "审计统计完成", f"已汇总 {len(audit_rows)} 条 Demo 审计日志和当前系统指标。")
+
+
 @app.post("/api/auth/login")
 def login(data: LoginRequest) -> dict[str, Any]:
     from .database import get_user_by_username
@@ -537,6 +1057,8 @@ def menus(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
 def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     conversation_id, effective_question = prepare_qa_conversation(data, user)
     result = rag_service.search(effective_question)
+    draft = build_issue_draft(effective_question)
+    agent_result = agent_service.run(effective_question, rag_service, build_issue_draft, result, draft)
     context = rag_service.build_context(result.references)
     try:
         model_result = llm_service.generate(effective_question, context, data.enable_thinking)
@@ -544,7 +1066,7 @@ def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> 
         raise HTTPException(status_code=503, detail=f"LLM 数字员工不可用：{exc}") from exc
     answer = model_result["content"]
     refs = [{"id": item["id"], "title": item["title"], "tags": item.get("tags", ""), "score": item.get("score", 0)} for item in result.references]
-    decision = build_employee_decision(effective_question, result, refs)
+    decision = build_employee_decision(effective_question, result, refs, draft)
     need_human = decision["need_human"]
     if need_human:
         answer += "\n\n系统判断该问题建议转人工：请创建在线记录，补充影响范围、联系方式和错误截图/日志。"
@@ -574,6 +1096,7 @@ def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> 
             "references": refs,
             "reasoning_available": model_result.get("reasoning_available", False),
             "reasoning_enabled": model_result.get("reasoning_enabled", False),
+            "agent": agent_result,
         },
     )
     return {
@@ -593,6 +1116,7 @@ def ask(data: QuestionRequest, user: dict[str, Any] = Depends(current_user)) -> 
         "llm_used": True,
         "reasoning_enabled": model_result.get("reasoning_enabled", False),
         "reasoning_available": model_result.get("reasoning_available", False),
+        "agent": agent_result,
         "employee": {
             "name": "云维",
             "role": "企业运维数字员工",
@@ -727,14 +1251,17 @@ def download_issue_attachment(attachment_id: int, user: dict[str, Any] = Depends
     with connect() as conn:
         row = conn.execute("select * from issue_attachments where id=?", (attachment_id,)).fetchone()
         ensure_row_exists(row, "附件")
-        can_access = user.get("role") in {"admin", "ops", "auditor"} or row["uploaded_by"] == user.get("id")
-        if not can_access and user.get("role") == "user":
-            pattern = f"%/api/issues/attachments/{attachment_id}/download%"
-            issue_row = conn.execute(
-                "select id from issues where created_by=? and attachment_url like ?",
-                (user.get("id"), pattern),
-            ).fetchone()
-            can_access = bool(issue_row)
+        can_access = row["uploaded_by"] == user.get("id") or user.get("role") in {"admin", "ops", "auditor"}
+        if row["issue_id"] and not can_access:
+            issue_row = conn.execute("select created_by,handled_by,visited_by from issues where id=?", (row["issue_id"],)).fetchone()
+            can_access = bool(
+                issue_row
+                and (
+                    issue_row["created_by"] == user.get("id")
+                    or issue_row["handled_by"] == user.get("id")
+                    or issue_row["visited_by"] == user.get("id")
+                )
+            )
     if not can_access:
         raise HTTPException(status_code=403, detail="无权下载该附件")
     path = UPLOAD_DIR / row["stored_name"]
@@ -754,12 +1281,14 @@ def list_knowledge(
     with connect() as conn:
         params: list[Any] = []
         where: list[str] = []
+        if user.get("role") == "user":
+            where.append("status='published'")
+        elif status:
+            where.append("status=?")
+            params.append(status)
         if q:
             where.append("(title like ? or content like ? or tags like ?)")
             params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
-        if status:
-            where.append("status=?")
-            params.append(status)
         if source_type:
             where.append("source_type=?")
             params.append(source_type)
@@ -772,31 +1301,69 @@ def list_knowledge(
 def create_knowledge(data: KnowledgeCreate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     require_roles(user, {"admin", "ops"})
     validate_knowledge_payload(data)
+    payload = data.model_dump()
+    if user.get("role") == "ops":
+        payload["status"] = "pending_review"
     now = utc_now()
     with connect() as conn:
         cur = conn.execute(
-            "insert into knowledge(title,content,tags,source_type,status,created_at,updated_at) values(?,?,?,?,?,?,?)",
-            (data.title, data.content, data.tags, data.source_type, data.status, now, now),
+            """
+            insert into knowledge(
+              title,content,tags,source_type,status,version,reviewed_by,reviewed_at,review_note,created_at,updated_at
+            ) values(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                payload["title"],
+                payload["content"],
+                payload["tags"],
+                payload["source_type"],
+                payload["status"],
+                1,
+                user["id"] if payload["status"] == "published" else None,
+                now if payload["status"] == "published" else None,
+                "创建时直接发布" if payload["status"] == "published" else "",
+                now,
+                now,
+            ),
         )
         item_id = int(cur.lastrowid)
-    audit("knowledge_create", "knowledge", f"新增知识：{data.title}", item_id)
-    return {"id": item_id, **data.model_dump(), "created_at": now, "updated_at": now}
+    audit("knowledge_create", "knowledge", f"{user.get('real_name','')}新增知识：{payload['title']}，状态：{payload['status']}", item_id)
+    return {
+        "id": item_id,
+        **payload,
+        "created_at": now,
+        "review_note": "创建时直接发布" if payload["status"] == "published" else "",
+        "reviewed_at": now if payload["status"] == "published" else None,
+        "reviewed_by": user["id"] if payload["status"] == "published" else None,
+        "updated_at": now,
+        "version": 1,
+    }
 
 
 @app.put("/api/knowledge/{item_id}")
 def update_knowledge(item_id: int, data: KnowledgeCreate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     require_roles(user, {"admin", "ops"})
     validate_knowledge_payload(data)
+    payload = data.model_dump()
     now = utc_now()
     with connect() as conn:
-        row = conn.execute("select id from knowledge where id=?", (item_id,)).fetchone()
+        row = conn.execute("select id,status,version from knowledge where id=?", (item_id,)).fetchone()
         ensure_row_exists(row, "知识条目")
+        if user.get("role") == "ops":
+            if row["status"] != "pending_review":
+                raise HTTPException(status_code=403, detail="运维人员只能维护待审核知识候选；已发布或已下线知识需管理员处理")
+            payload["status"] = "pending_review"
+        next_version = int(row["version"] or 1) + 1
         conn.execute(
-            "update knowledge set title=?,content=?,tags=?,source_type=?,status=?,updated_at=? where id=?",
-            (data.title, data.content, data.tags, data.source_type, data.status, now, item_id),
+            """
+            update knowledge
+            set title=?,content=?,tags=?,source_type=?,status=?,version=?,reviewed_by=null,reviewed_at=null,review_note='',updated_at=?
+            where id=?
+            """,
+            (payload["title"], payload["content"], payload["tags"], payload["source_type"], payload["status"], next_version, now, item_id),
         )
-    audit("knowledge_update", "knowledge", f"更新知识：{data.title}", item_id)
-    return {"id": item_id, **data.model_dump(), "updated_at": now}
+    audit("knowledge_update", "knowledge", f"{user.get('real_name','')}更新知识：{payload['title']}，状态：{payload['status']}", item_id)
+    return {"id": item_id, **payload, "review_note": "", "reviewed_at": None, "reviewed_by": None, "updated_at": now, "version": next_version}
 
 
 @app.post("/api/knowledge/{item_id}/status")
@@ -805,7 +1372,7 @@ def change_knowledge_status(
     data: KnowledgeStatusUpdate,
     user: dict[str, Any] = Depends(current_user),
 ) -> dict[str, Any]:
-    require_roles(user, {"admin", "ops"})
+    require_roles(user, {"admin"})
     validate_knowledge_payload(data)
     now = utc_now()
     with connect() as conn:
@@ -813,9 +1380,17 @@ def change_knowledge_status(
         ensure_row_exists(row, "知识条目")
         if row["status"] == data.status:
             return {"id": item_id, "status": data.status, "updated_at": now}
-        conn.execute("update knowledge set status=?,updated_at=? where id=?", (data.status, now, item_id))
-    audit("knowledge_status", "knowledge", f"知识状态变更：{row['title']} {row['status']} -> {data.status}", item_id)
-    return {"id": item_id, "status": data.status, "updated_at": now}
+        review_note = data.review_note.strip() or (
+            "审核通过并发布" if data.status == "published" else
+            "退回待审核" if data.status == "pending_review" else
+            "管理员下线"
+        )
+        conn.execute(
+            "update knowledge set status=?,reviewed_by=?,reviewed_at=?,review_note=?,updated_at=? where id=?",
+            (data.status, user["id"], now, review_note, now, item_id),
+        )
+    audit("knowledge_status", "knowledge", f"知识状态变更：{row['title']} {row['status']} -> {data.status}，审核意见：{review_note}", item_id)
+    return {"id": item_id, "review_note": review_note, "reviewed_at": now, "reviewed_by": user["id"], "status": data.status, "updated_at": now}
 
 
 @app.get("/api/issues")
@@ -857,6 +1432,7 @@ def list_issues(status: str = "", q: str = "", user: dict[str, Any] = Depends(cu
 def create_issue(data: IssueCreate, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     now = utc_now()
     with connect() as conn:
+        validate_issue_attachment_refs(conn, data.attachment_url, user)
         cur = conn.execute(
             """
             insert into issues(
@@ -881,6 +1457,7 @@ def create_issue(data: IssueCreate, user: dict[str, Any] = Depends(current_user)
             ),
         )
         issue_id = int(cur.lastrowid)
+        bind_issue_attachments(conn, issue_id, data.attachment_url, user)
         issue_event(conn, issue_id, "created", user, f"创建在线记录：{data.title}")
     audit("issue_create", "issue", f"创建在线记录：{data.title}", issue_id)
     return {"id": issue_id, **data.model_dump(), "status": "pending", "created_at": now, "updated_at": now}
@@ -891,10 +1468,14 @@ def handle_issue(issue_id: int, data: IssueHandle, user: dict[str, Any] = Depend
     require_roles(user, {"admin", "ops"})
     now = utc_now()
     with connect() as conn:
-        conn.execute(
+        row = conn.execute("select id from issues where id=?", (issue_id,)).fetchone()
+        ensure_row_exists(row, "在线记录")
+        cur = conn.execute(
             "update issues set solution=?,status='handled',handled_by=?,updated_at=? where id=?",
             (data.solution, user["id"], now, issue_id),
         )
+        if cur.rowcount != 1:
+            raise HTTPException(status_code=404, detail="在线记录不存在")
         issue_event(conn, issue_id, "handled", user, data.solution)
     audit("issue_handle", "issue", f"处理在线记录：{data.solution[:80]}", issue_id)
     return {"id": issue_id, "status": "handled", "solution": data.solution}
@@ -906,12 +1487,15 @@ def visit_issue(issue_id: int, data: IssueVisit, user: dict[str, Any] = Depends(
     now = utc_now()
     status = "closed" if data.resolved else "pending"
     with connect() as conn:
-        conn.execute(
+        row = conn.execute("select id,title,solution from issues where id=?", (issue_id,)).fetchone()
+        ensure_row_exists(row, "在线记录")
+        cur = conn.execute(
             "update issues set resolved=?,satisfaction_score=?,visit_result=?,status=?,visited_by=?,updated_at=? where id=?",
             (int(data.resolved), data.satisfaction_score, data.visit_result, status, user["id"], now, issue_id),
         )
+        if cur.rowcount != 1:
+            raise HTTPException(status_code=404, detail="在线记录不存在")
         issue_event(conn, issue_id, "visited", user, f"{'已解决' if data.resolved else '未解决'}：{data.visit_result}")
-        row = conn.execute("select title,solution from issues where id=?", (issue_id,)).fetchone()
         if data.resolved and row and row["solution"]:
             conn.execute(
                 "insert into knowledge(title,content,tags,source_type,status,created_at,updated_at) values(?,?,?,?,?,?,?)",
@@ -1205,6 +1789,22 @@ def audit_logs(
 @app.get("/api/audit/stats")
 def stats(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     with connect() as conn:
+        if user.get("role") == "user":
+            issues = conn.execute("select count(*) from issues where created_by=?", (user["id"],)).fetchone()[0]
+            pending_issues = conn.execute("select count(*) from issues where created_by=? and status='pending'", (user["id"],)).fetchone()[0]
+            handled_issues = conn.execute("select count(*) from issues where created_by=? and status='handled'", (user["id"],)).fetchone()[0]
+            closed = conn.execute("select count(*) from issues where created_by=? and status='closed'", (user["id"],)).fetchone()[0]
+            total_qa = conn.execute("select count(*) from qa_conversations where user_id=?", (user["id"],)).fetchone()[0]
+            return {
+                "total_qa": total_qa,
+                "human_transfer_rate": 0,
+                "self_solved_rate": 0,
+                "issues": issues,
+                "pending_issues": pending_issues,
+                "handled_issues": handled_issues,
+                "closed_issues": closed,
+            }
+        require_roles(user, {"admin", "ops", "auditor"})
         total_qa = conn.execute("select count(*) from qa_logs").fetchone()[0]
         human = conn.execute("select count(*) from qa_logs where need_human=1").fetchone()[0]
         issues = conn.execute("select count(*) from issues").fetchone()[0]

@@ -112,8 +112,8 @@ export function updateKnowledge(id: number, data: Record<string, any>) {
   return requestClient.put<any>(`/knowledge/${id}`, data);
 }
 
-export function changeKnowledgeStatus(id: number, status: string) {
-  return requestClient.post<any>(`/knowledge/${id}/status`, { status });
+export function changeKnowledgeStatus(id: number, status: string, reviewNote = '') {
+  return requestClient.post<any>(`/knowledge/${id}/status`, { review_note: reviewNote, status });
 }
 
 export function getStats() {
@@ -122,4 +122,20 @@ export function getStats() {
 
 export function getAuditLogs(params: Record<string, any> = {}) {
   return requestClient.get<any>('/audit/logs', { params });
+}
+
+export function createDemoSession() {
+  return requestClient.post<any>('/demo/session');
+}
+
+export function getDemoSession(id: string) {
+  return requestClient.get<any>(`/demo/session/${id}`);
+}
+
+export function runDemoStep(id: string) {
+  return requestClient.post<any>(`/demo/session/${id}/step`);
+}
+
+export function resetDemoSession(id: string) {
+  return requestClient.post<any>(`/demo/session/${id}/reset`);
 }

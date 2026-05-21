@@ -56,6 +56,10 @@ def init_db() -> None:
           tags text not null default '',
           source_type text not null default 'faq',
           status text not null default 'published',
+          version integer not null default 1,
+          reviewed_by integer,
+          reviewed_at text,
+          review_note text not null default '',
           created_at text not null,
           updated_at text not null
         );
@@ -126,6 +130,7 @@ def init_db() -> None:
           stored_name text not null,
           content_type text not null default '',
           size integer not null default 0,
+          issue_id integer,
           uploaded_by integer,
           created_at text not null
         );
@@ -145,8 +150,10 @@ def init_db() -> None:
         );
         """)
         ensure_issue_columns(conn)
+        ensure_knowledge_columns(conn)
         ensure_account_columns(conn)
         ensure_account_approval_columns(conn)
+        ensure_issue_attachment_columns(conn)
         ensure_issue_events(conn)
         seed_users(conn)
         seed_knowledge(conn)
@@ -169,6 +176,19 @@ def ensure_issue_columns(conn: sqlite3.Connection) -> None:
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"alter table issues add column {name} {definition}")
+
+
+def ensure_knowledge_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(knowledge)").fetchall()}
+    columns = {
+        "version": "integer not null default 1",
+        "reviewed_by": "integer",
+        "reviewed_at": "text",
+        "review_note": "text not null default ''",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table knowledge add column {name} {definition}")
 
 
 def ensure_account_columns(conn: sqlite3.Connection) -> None:
@@ -207,6 +227,16 @@ def ensure_account_approval_columns(conn: sqlite3.Connection) -> None:
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"alter table account_approvals add column {name} {definition}")
+
+
+def ensure_issue_attachment_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(issue_attachments)").fetchall()}
+    columns = {
+        "issue_id": "integer",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table issue_attachments add column {name} {definition}")
 
 
 def seed_users(conn: sqlite3.Connection) -> None:

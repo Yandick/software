@@ -28,7 +28,7 @@ const auditColumns = [
 const qaColumns = [
   { dataIndex: 'question', title: '用户问题', width: 260 },
   { dataIndex: 'answer', title: '数字员工回答' },
-  { dataIndex: 'need_human', title: '转人工', width: 100 },
+  { dataIndex: 'need_human', title: '人工协同', width: 110 },
   { dataIndex: 'model_status', title: '模型状态', width: 120 },
   { dataIndex: 'created_at', title: '时间', width: 190 },
 ];
@@ -49,7 +49,7 @@ const targetOptions = computed(() =>
 
 const metricCards = computed(() => [
   { label: '问答次数', value: stats.value.total_qa || 0, tone: 'blue' },
-  { label: '转人工率', value: `${Math.round((stats.value.human_transfer_rate || 0) * 100)}%`, tone: 'orange' },
+  { label: '人工协同率', value: `${Math.round((stats.value.human_transfer_rate || 0) * 100)}%`, tone: 'orange' },
   { label: '待处理记录', value: stats.value.pending_issues || 0, tone: 'red' },
   { label: '已关闭记录', value: stats.value.closed_issues || 0, tone: 'green' },
   { label: '活跃账号', value: stats.value.active_accounts || 0, tone: 'cyan' },
@@ -99,7 +99,7 @@ onMounted(load);
       <div>
         <div class="eyebrow">Audit & Metrics</div>
         <h1>统计审计中心</h1>
-        <p>统一查看问答日志、账号/知识/工单操作审计和关键闭环指标，便于课程验收和安全追踪。</p>
+        <p>统一查看问答日志、账号、知识和在线记录的操作审计，支撑安全追踪与运行质量评估。</p>
       </div>
       <a-button :loading="loading" type="primary" @click="load">刷新数据</a-button>
     </div>
@@ -120,7 +120,7 @@ onMounted(load);
             <a-progress :percent="percent(stats.self_solved_rate)" />
           </div>
           <div class="ratio-box">
-            <span>转人工率</span>
+            <span>人工协同率</span>
             <strong>{{ percent(stats.human_transfer_rate) }}%</strong>
             <a-progress :percent="percent(stats.human_transfer_rate)" status="active" />
           </div>
@@ -153,8 +153,8 @@ onMounted(load);
             {{ item.label }}
           </a-select-option>
         </a-select>
-        <a-select v-model:value="filters.need_human" allow-clear placeholder="问答转人工" @change="load">
-          <a-select-option value="1">建议转人工</a-select-option>
+        <a-select v-model:value="filters.need_human" allow-clear placeholder="人工协同建议" @change="load">
+          <a-select-option value="1">建议人工协同</a-select-option>
           <a-select-option value="0">可自助处理</a-select-option>
         </a-select>
         <div class="flex gap-2">
@@ -191,7 +191,7 @@ onMounted(load);
           </template>
           <template v-if="column.dataIndex === 'need_human'">
             <a-tag :color="record.need_human ? 'red' : 'green'">
-              {{ record.need_human ? '转人工' : '自助' }}
+              {{ record.need_human ? '人工协同' : '自助' }}
             </a-tag>
           </template>
           <template v-if="column.dataIndex === 'model_status'">

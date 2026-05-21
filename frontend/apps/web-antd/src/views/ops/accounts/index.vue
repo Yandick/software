@@ -304,7 +304,7 @@ onMounted(load);
       v-if="!isAdmin"
       class="mb-5"
       message="当前账号没有账号变更权限"
-      description="你可以查看账号信息；新增需要管理员角色，修改、冻结、解冻需要管理员或运维人员提交审批，并会写入审计日志。"
+      description="当前角色可查看账号信息；新增需管理员权限，修改、冻结、解冻需提交审批并写入审计日志。"
       show-icon
       type="info"
     />

@@ -18,7 +18,7 @@ const routes: RouteRecordRaw[] = [
         meta: {
           affixTab: true,
           icon: 'lucide:message-circle',
-          title: '立即对话',
+          title: '智能服务台',
         },
       },
       {
@@ -59,6 +59,16 @@ const routes: RouteRecordRaw[] = [
           authority: ['admin', 'auditor'],
           icon: 'lucide:shield-check',
           title: '统计审计',
+        },
+      },
+      {
+        name: 'OpsDemo',
+        path: '/ops/demo',
+        component: () => import('#/views/ops/demo/index.vue'),
+        meta: {
+          authority: ['admin'],
+          icon: 'lucide:monitor-play',
+          title: '闭环演示',
         },
       },
     ],

@@ -36,8 +36,11 @@ const canMaintain = computed(() => {
   return role === 'admin' || role === 'ops';
 });
 
+const canPublish = computed(() => userStore.userInfo?.roles?.[0] === 'admin');
+
 const columns = [
   { dataIndex: 'title', title: '标题', width: 240 },
+  { dataIndex: 'version', title: '版本', width: 90 },
   { dataIndex: 'source_type', title: '来源', width: 120 },
   { dataIndex: 'status', title: '状态', width: 120 },
   { dataIndex: 'tags', title: '标签', width: 180 },
@@ -93,6 +96,10 @@ async function submit() {
 }
 
 function openEdit(record: any) {
+  if (!canEditRecord(record)) {
+    message.warning('运维人员只能编辑待审核知识候选');
+    return;
+  }
   editForm.value = {
     content: record.content,
     id: record.id,
@@ -121,16 +128,20 @@ async function saveEdit() {
   await load();
 }
 
+function canEditRecord(record: any) {
+  return canPublish.value || (canMaintain.value && record.status === 'pending_review');
+}
+
 function confirmStatus(record: any, status: string) {
   const meta = statusMeta(status);
   Modal.confirm({
     content:
       status === 'published'
-        ? '发布后该条知识会进入数字员工 RAG 检索范围，请确认内容已审核且不含敏感信息。'
+        ? '发布后该条知识会进入数字员工知识检索范围，请确认内容已审核且不含敏感信息。'
         : '状态变更会写入审计日志；下线后该条知识不会再被数字员工用于回答。',
     okText: `确认${meta.label}`,
     onOk: async () => {
-      await changeKnowledgeStatus(record.id, status);
+      await changeKnowledgeStatus(record.id, status, `${meta.label}：${record.title}`);
       message.success(`知识状态已更新为${meta.label}`);
       await load();
     },
@@ -155,7 +166,7 @@ onMounted(load);
       <div class="text-sm font-semibold uppercase tracking-[0.2em] text-amber-200">Knowledge Base</div>
       <h1 class="mt-3 text-3xl font-semibold">知识库维护与审核</h1>
       <p class="mt-3 max-w-3xl text-white/70">
-        FAQ、Runbook、制度流程和已解决案例先作为候选知识沉淀，审核发布后才会进入数字员工检索范围。
+        常见问答、操作规程、制度流程和已解决案例先作为候选知识沉淀，审核发布后进入数字员工检索范围。
       </p>
     </div>
 
@@ -163,9 +174,17 @@ onMounted(load);
       v-if="!canMaintain"
       class="mb-5"
       message="当前账号没有知识维护权限"
-      description="你可以查看知识条目；新增、编辑、发布、下线需要管理员或运维人员角色，并会写入审计日志。"
+      description="当前角色可查看知识条目；新增、编辑候选、发布、下线需具备对应权限，并将写入审计日志。"
       show-icon
       type="info"
+    />
+    <a-alert
+      v-else-if="!canPublish"
+      class="mb-5"
+      message="运维人员可提交和编辑待审核知识候选"
+      description="已发布或已下线知识由管理员发布、下线或退回审核，避免未经审核的内容影响数字员工检索。"
+      show-icon
+      type="warning"
     />
 
     <a-card title="提交候选知识">
@@ -177,7 +196,7 @@ onMounted(load);
             {{ item.label }}
           </a-select-option>
         </a-select>
-        <a-select v-model:value="form.status" :disabled="!canMaintain" placeholder="审核状态">
+        <a-select v-model:value="form.status" :disabled="!canPublish" placeholder="审核状态">
           <a-select-option v-for="item in statusOptions" :key="item.value" :value="item.value">
             {{ item.label }}
           </a-select-option>
@@ -188,7 +207,7 @@ onMounted(load);
         class="mt-4"
         :disabled="!canMaintain"
         :rows="5"
-        placeholder="请填写处理步骤、适用范围、风险提示和转人工条件。"
+        placeholder="请填写处理步骤、适用范围、风险提示和人工协同条件。"
       />
       <a-button class="mt-4" :disabled="!canMaintain" :loading="submitting" type="primary" @click="submit">
         提交知识
@@ -226,8 +245,14 @@ onMounted(load);
           <template v-if="column.dataIndex === 'source_type'">
             <a-tag>{{ sourceTypeLabel(record.source_type) }}</a-tag>
           </template>
+          <template v-if="column.dataIndex === 'version'">
+            <a-tag color="geekblue">v{{ record.version || 1 }}</a-tag>
+          </template>
           <template v-if="column.dataIndex === 'status'">
             <a-tag :color="statusMeta(record.status).color">{{ statusMeta(record.status).label }}</a-tag>
+            <div v-if="record.review_note" class="mt-1 text-xs text-slate-500">
+              审核：{{ record.review_note }}
+            </div>
           </template>
           <template v-if="column.dataIndex === 'tags'">
             <a-space wrap>
@@ -239,10 +264,10 @@ onMounted(load);
           </template>
           <template v-if="column.key === 'action'">
             <a-space wrap>
-              <a-button :disabled="!canMaintain" size="small" @click="openEdit(record)">编辑</a-button>
+              <a-button :disabled="!canEditRecord(record)" size="small" @click="openEdit(record)">编辑</a-button>
               <a-button
                 v-if="record.status !== 'published'"
-                :disabled="!canMaintain"
+                :disabled="!canPublish"
                 size="small"
                 type="primary"
                 @click="confirmStatus(record, 'published')"
@@ -251,7 +276,7 @@ onMounted(load);
               </a-button>
               <a-button
                 v-if="record.status !== 'pending_review'"
-                :disabled="!canMaintain"
+                :disabled="!canPublish"
                 size="small"
                 @click="confirmStatus(record, 'pending_review')"
               >
@@ -259,7 +284,7 @@ onMounted(load);
               </a-button>
               <a-button
                 v-if="record.status !== 'offline'"
-                :disabled="!canMaintain"
+                :disabled="!canPublish"
                 danger
                 size="small"
                 @click="confirmStatus(record, 'offline')"
@@ -288,7 +313,7 @@ onMounted(load);
           </a-select>
         </a-form-item>
         <a-form-item label="审核状态">
-          <a-select v-model:value="editForm.status">
+          <a-select v-model:value="editForm.status" :disabled="!canPublish">
             <a-select-option v-for="item in statusOptions" :key="item.value" :value="item.value">
               {{ item.label }}
             </a-select-option>

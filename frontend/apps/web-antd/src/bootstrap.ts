@@ -8,6 +8,7 @@ import '@vben/styles';
 import '@vben/styles/antd';
 
 import { useTitle } from '@vueuse/core';
+import Antd from 'ant-design-vue';
 
 import { $t, setupI18n } from '#/locales';
 
@@ -55,6 +56,9 @@ async function bootstrap(namespace: string) {
 
   // 配置路由及路由守卫
   app.use(router);
+
+  // 业务页面大量使用 <a-*> 组件，统一注册，避免按钮/表格等退化为原生未知标签。
+  app.use(Antd);
 
   // 配置Motion插件
   const { MotionPlugin } = await import('@vben/plugins/motion');

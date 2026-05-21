@@ -17,6 +17,7 @@ class KnowledgeCreate(BaseModel):
 
 class KnowledgeStatusUpdate(BaseModel):
     status: str = Field(min_length=1)
+    review_note: str = ""
 
 
 class QuestionRequest(BaseModel):
