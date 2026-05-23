@@ -1,0 +1,17 @@
+[Unit]
+Description=Ops Digital Employee vLLM Service
+After=network.target
+
+[Service]
+Type=simple
+User=ops-employee
+Group=ops-employee
+WorkingDirectory=/opt/ops-employee/software
+EnvironmentFile=/etc/ops-employee/backend.env
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/miniconda/envs/soft/bin/python -m vllm.entrypoints.openai.api_server --model ${OPS_MODEL_PATH} --served-model-name ${OPS_VLLM_MODEL_NAME} --host 127.0.0.1 --port 8000 --reasoning-parser qwen3 --gpu-memory-utilization 0.55 --max-model-len 40960
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -9,14 +8,11 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .config import get_settings
+from .passwords import hash_password as _hash_password
 
 
 def utc_now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-
-def _hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 @contextmanager
@@ -37,6 +33,7 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def init_db() -> None:
+    settings = get_settings()
     with connect() as conn:
         conn.executescript("""
         create table if not exists users (
@@ -155,7 +152,8 @@ def init_db() -> None:
         ensure_account_approval_columns(conn)
         ensure_issue_attachment_columns(conn)
         ensure_issue_events(conn)
-        seed_users(conn)
+        if settings.seed_demo_accounts:
+            seed_users(conn)
         seed_knowledge(conn)
 
 
@@ -273,6 +271,11 @@ def get_user_by_username(username: str) -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute("select * from users where username=?", (username,)).fetchone()
         return dict(row) if row else None
+
+
+def update_user_password_hash(user_id: int, password_hash: str) -> None:
+    with connect() as conn:
+        conn.execute("update users set password_hash=? where id=?", (password_hash, user_id))
 
 
 def write_audit(

@@ -7,9 +7,11 @@ import { message, Modal } from 'ant-design-vue';
 
 import {
   changeKnowledgeStatus,
+  checkKnowledgeSensitive,
   createKnowledge,
   listKnowledge,
   updateKnowledge,
+  uploadKnowledgeDocument,
 } from '#/api/ops';
 
 const userStore = useUserStore();
@@ -29,7 +31,12 @@ const statusFilter = ref('');
 const sourceTypeFilter = ref('');
 const loading = ref(false);
 const submitting = ref(false);
+const sensitiveChecking = ref(false);
 const editOpen = ref(false);
+const documentFileList = ref<any[]>([]);
+const documentTags = ref('');
+const documentTitle = ref('');
+const documentUploading = ref(false);
 
 const canMaintain = computed(() => {
   const role = userStore.userInfo?.roles?.[0];
@@ -53,6 +60,7 @@ const sourceTypeOptions = [
   { label: 'Runbook', value: 'runbook' },
   { label: '处理案例', value: 'case' },
   { label: '制度流程', value: 'policy' },
+  { label: '上传文档', value: 'document' },
   { label: '其他', value: 'other' },
 ];
 
@@ -86,12 +94,57 @@ async function submit() {
   }
   submitting.value = true;
   try {
+    const check = await runSensitiveCheck('create', false);
+    if (form.value.status === 'published' && check?.blocking) {
+      message.error('知识内容包含高风险敏感信息，请先脱敏后再发布');
+      return;
+    }
     await createKnowledge(form.value);
     form.value = { ...emptyForm };
     message.success('知识已提交，可审核发布后进入数字员工检索范围');
     await load();
   } finally {
     submitting.value = false;
+  }
+}
+
+function beforeDocumentUpload(file: any) {
+  documentFileList.value = [file];
+  if (!documentTitle.value.trim()) {
+    documentTitle.value = String(file.name || '').replace(/\.[^.]+$/, '');
+  }
+  return false;
+}
+
+function removeDocumentUpload() {
+  documentFileList.value = [];
+}
+
+async function submitDocumentUpload() {
+  if (!canMaintain.value) {
+    message.warning('只有管理员或运维人员可以导入知识文档');
+    return;
+  }
+  const file = documentFileList.value[0]?.originFileObj || documentFileList.value[0];
+  if (!file) {
+    message.warning('请选择要导入的纯文本知识文档');
+    return;
+  }
+  documentUploading.value = true;
+  try {
+    const result = await uploadKnowledgeDocument(file, {
+      tags: documentTags.value.trim(),
+      title: documentTitle.value.trim(),
+    });
+    message.success(`已生成 ${result.chunk_count} 个待审核知识片段，脱敏 ${result.redacted_count} 个片段`);
+    documentFileList.value = [];
+    documentTags.value = '';
+    documentTitle.value = '';
+    sourceTypeFilter.value = 'document';
+    statusFilter.value = 'pending_review';
+    await load();
+  } finally {
+    documentUploading.value = false;
   }
 }
 
@@ -116,6 +169,11 @@ async function saveEdit() {
     message.warning('请填写知识标题和内容');
     return;
   }
+  const check = await runSensitiveCheck('edit', false);
+  if (editForm.value.status === 'published' && check?.blocking) {
+    message.error('知识内容包含高风险敏感信息，请先脱敏后再发布');
+    return;
+  }
   await updateKnowledge(editForm.value.id, {
     content: editForm.value.content,
     source_type: editForm.value.source_type,
@@ -134,6 +192,14 @@ function canEditRecord(record: any) {
 
 function confirmStatus(record: any, status: string) {
   const meta = statusMeta(status);
+  if (status === 'published' && record.sensitive_check?.blocking) {
+    Modal.warning({
+      content: sensitiveSummary(record.sensitive_check),
+      okText: '知道了',
+      title: '发布前需要先脱敏',
+    });
+    return;
+  }
   Modal.confirm({
     content:
       status === 'published'
@@ -147,6 +213,70 @@ function confirmStatus(record: any, status: string) {
     },
     title: `确认将「${record.title}」设为${meta.label}？`,
   });
+}
+
+function sensitiveSummary(check: any) {
+  const findings = check?.findings || [];
+  if (!findings.length) {
+    return '未发现手机号、证件号、密码、密钥等敏感信息。';
+  }
+  return findings
+    .map((item: any) => `${item.label} ${item.count || 0} 处，风险等级：${item.severity}`)
+    .join('；');
+}
+
+function applyRedacted(target: 'create' | 'edit', check: any) {
+  const redacted = check?.redacted || {};
+  if (target === 'create') {
+    form.value = {
+      ...form.value,
+      content: redacted.content ?? form.value.content,
+      tags: redacted.tags ?? form.value.tags,
+      title: redacted.title ?? form.value.title,
+    };
+  } else {
+    editForm.value = {
+      ...editForm.value,
+      content: redacted.content ?? editForm.value.content,
+      tags: redacted.tags ?? editForm.value.tags,
+      title: redacted.title ?? editForm.value.title,
+    };
+  }
+}
+
+async function runSensitiveCheck(target: 'create' | 'edit' = 'create', interactive = true) {
+  const current = target === 'create' ? form.value : editForm.value;
+  if (!current.title.trim() && !current.content.trim() && !current.tags.trim()) {
+    if (interactive) {
+      message.warning('请先填写知识标题或内容');
+    }
+    return null;
+  }
+  sensitiveChecking.value = true;
+  try {
+    const check = await checkKnowledgeSensitive({
+      content: current.content,
+      tags: current.tags,
+      title: current.title,
+    });
+    if (!check.has_sensitive) {
+      if (interactive) {
+        message.success('未发现需要脱敏的敏感信息');
+      }
+      return check;
+    }
+    if (interactive) {
+      Modal.confirm({
+        content: `${sensitiveSummary(check)}。是否使用脱敏后的文本替换当前表单？`,
+        okText: '一键脱敏',
+        onOk: () => applyRedacted(target, check),
+        title: check.blocking ? '发现高风险敏感信息' : '发现疑似敏感信息',
+      });
+    }
+    return check;
+  } finally {
+    sensitiveChecking.value = false;
+  }
 }
 
 function sourceTypeLabel(value: string) {
@@ -212,6 +342,30 @@ onMounted(load);
       <a-button class="mt-4" :disabled="!canMaintain" :loading="submitting" type="primary" @click="submit">
         提交知识
       </a-button>
+      <a-button class="ml-2 mt-4" :disabled="!canMaintain" :loading="sensitiveChecking" @click="runSensitiveCheck('create')">
+        敏感信息检查
+      </a-button>
+    </a-card>
+
+    <a-card v-if="canMaintain" class="mt-5" title="导入知识文档">
+      <div class="grid gap-4 md:grid-cols-2">
+        <a-input v-model:value="documentTitle" placeholder="文档标题，默认使用文件名" />
+        <a-input v-model:value="documentTags" placeholder="标签，如：VPN,证书,远程办公" />
+      </div>
+      <div class="mt-4 flex flex-wrap items-center gap-3">
+        <a-upload
+          v-model:file-list="documentFileList"
+          accept=".txt,.md,.markdown,.log,.csv,text/plain,text/markdown,text/csv"
+          :before-upload="beforeDocumentUpload"
+          :max-count="1"
+          @remove="removeDocumentUpload"
+        >
+          <a-button>选择文档</a-button>
+        </a-upload>
+        <a-button :disabled="!documentFileList.length" :loading="documentUploading" type="primary" @click="submitDocumentUpload">
+          导入为候选知识
+        </a-button>
+      </div>
     </a-card>
 
     <a-card class="mt-5" title="知识条目">
@@ -241,6 +395,8 @@ onMounted(load);
           <template v-if="column.dataIndex === 'title'">
             <div class="font-medium">#{{ record.id }} {{ record.title }}</div>
             <div class="mt-1 line-clamp-2 text-sm text-slate-500">{{ record.content }}</div>
+            <a-tag v-if="record.sensitive_check?.blocking" class="mt-2" color="red">需脱敏后发布</a-tag>
+            <a-tag v-else-if="record.sensitive_check?.has_sensitive" class="mt-2" color="orange">疑似敏感信息</a-tag>
           </template>
           <template v-if="column.dataIndex === 'source_type'">
             <a-tag>{{ sourceTypeLabel(record.source_type) }}</a-tag>
@@ -322,6 +478,7 @@ onMounted(load);
         <a-form-item label="内容">
           <a-textarea v-model:value="editForm.content" :rows="7" placeholder="知识内容" />
         </a-form-item>
+        <a-button :loading="sensitiveChecking" @click="runSensitiveCheck('edit')">敏感信息检查</a-button>
       </a-form>
     </a-modal>
   </div>

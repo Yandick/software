@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import { computed, onMounted, ref } from 'vue';
 
-import { getAuditLogs, getStats } from '#/api/ops';
+import { exportAuditLogs, getAuditLogs, getStats } from '#/api/ops';
 
 const stats = ref<any>({});
 const auditLogs = ref<any[]>([]);
@@ -9,6 +9,7 @@ const qaLogs = ref<any[]>([]);
 const eventSummary = ref<any[]>([]);
 const targetSummary = ref<any[]>([]);
 const loading = ref(false);
+const exportLoading = ref(false);
 const filters = ref({
   event_type: '',
   limit: 100,
@@ -61,9 +62,7 @@ const metricCards = computed(() => [
 async function load() {
   loading.value = true;
   try {
-    const params = Object.fromEntries(
-      Object.entries(filters.value).filter(([, value]) => value !== '' && value !== undefined && value !== null),
-    );
+    const params = activeFilters();
     const [statsResult, logsResult] = await Promise.all([getStats(), getAuditLogs(params)]);
     stats.value = statsResult;
     auditLogs.value = logsResult.audit || [];
@@ -86,6 +85,28 @@ function resetFilters() {
   void load();
 }
 
+function activeFilters() {
+  return Object.fromEntries(
+    Object.entries(filters.value).filter(([, value]) => value !== '' && value !== undefined && value !== null),
+  );
+}
+
+async function downloadAudit() {
+  exportLoading.value = true;
+  try {
+    const result = await exportAuditLogs({ ...activeFilters(), limit: 500 });
+    const blob = new Blob([result.content || ''], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = result.filename || 'audit_logs.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    exportLoading.value = false;
+  }
+}
+
 function percent(value: number) {
   return Math.round((value || 0) * 100);
 }
@@ -101,7 +122,10 @@ onMounted(load);
         <h1>统计审计中心</h1>
         <p>统一查看问答日志、账号、知识和在线记录的操作审计，支撑安全追踪与运行质量评估。</p>
       </div>
-      <a-button :loading="loading" type="primary" @click="load">刷新数据</a-button>
+      <div class="flex gap-2">
+        <a-button :loading="exportLoading" @click="downloadAudit">导出 CSV</a-button>
+        <a-button :loading="loading" type="primary" @click="load">刷新数据</a-button>
+      </div>
     </div>
 
     <div class="grid gap-4 md:grid-cols-4">

@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+from typing import Callable
+
+from fastapi.testclient import TestClient
+
+
+def test_auth_login_me_refresh_and_menu(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    headers = auth_headers("admin", "admin123")
+
+    me = client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200, me.text
+    assert me.json()["username"] == "admin"
+    assert me.json()["role"] == "admin"
+
+    refresh = client.post("/api/auth/refresh", headers=headers)
+    assert refresh.status_code == 200, refresh.text
+    assert refresh.json()["status"] == 0
+    assert refresh.json()["data"]
+
+    menu = client.get("/api/menu/all", headers=headers)
+    assert menu.status_code == 200, menu.text
+    assert menu.json() == []
+
+
+def test_auth_rejects_bad_password(client: TestClient) -> None:
+    response = client.post("/api/auth/login", json={"password": "wrong", "username": "admin"})
+    assert response.status_code == 401, response.text
+    assert response.json()["detail"] == "用户名或密码错误"

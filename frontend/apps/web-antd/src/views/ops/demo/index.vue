@@ -260,8 +260,14 @@ onBeforeUnmount(stopAuto);
 </script>
 
 <template>
-  <div class="demo-page">
-    <section class="hero-card stage-in">
+  <div
+    class="demo-page"
+    data-testid="demo-page"
+    :data-status="state.status || 'initializing'"
+    :data-step-index="state.step_index || 0"
+    :data-step-total="steps.length"
+  >
+    <section class="hero-card stage-in" data-testid="demo-hero">
       <div class="hero-copy">
         <div class="eyebrow-row">
           <span class="live-dot"></span>
@@ -282,10 +288,11 @@ onBeforeUnmount(stopAuto);
           <span>闭环进度</span>
           <b>{{ currentStage.done }}/{{ currentStage.total }}</b>
         </div>
-        <div class="hero-actions">
-          <AButton :loading="loading" size="large" @click="resetSession">重置链路</AButton>
+        <div class="hero-actions" data-testid="demo-actions">
+          <AButton data-testid="demo-reset" :loading="loading" size="large" @click="resetSession">重置链路</AButton>
           <AButton
             class="white-action-button"
+            data-testid="demo-run-step"
             :disabled="isFinished || autoRunning"
             :loading="loading"
             size="large"
@@ -297,18 +304,19 @@ onBeforeUnmount(stopAuto);
           <AButton
             v-if="!autoRunning"
             class="white-action-button"
+            data-testid="demo-auto-run"
             :disabled="isFinished || loading"
             size="large"
             @click="startAuto"
           >
             自动推进
           </AButton>
-          <AButton v-else danger size="large" @click="stopAuto">暂停推进</AButton>
+          <AButton v-else danger data-testid="demo-pause-auto" size="large" @click="stopAuto">暂停推进</AButton>
         </div>
       </div>
     </section>
 
-    <section class="progress-card stage-in stage-delay-1">
+    <section class="progress-card stage-in stage-delay-1" data-testid="demo-progress">
       <div class="progress-layout">
         <div class="progress-flow">
           <div class="progress-head">
@@ -343,9 +351,9 @@ onBeforeUnmount(stopAuto);
       </div>
     </section>
 
-    <section class="demo-stage">
+    <section class="demo-stage" data-testid="demo-stage">
       <div class="grid-panels">
-        <article class="role-panel user-panel stage-in stage-delay-2">
+        <article class="role-panel user-panel stage-in stage-delay-2" data-testid="demo-panel-user">
           <div class="panel-head">
             <span>用户窗口</span>
             <ATag color="blue">普通用户</ATag>
@@ -377,7 +385,7 @@ onBeforeUnmount(stopAuto);
           </div>
         </article>
 
-        <article class="role-panel agent-panel stage-in stage-delay-3">
+        <article class="role-panel agent-panel stage-in stage-delay-3" data-testid="demo-panel-agent">
           <div class="panel-head">
             <span>数字员工窗口</span>
             <ATag color="cyan">云维数字员工</ATag>
@@ -422,7 +430,7 @@ onBeforeUnmount(stopAuto);
           </div>
         </article>
 
-        <article class="role-panel ops-panel stage-in stage-delay-4">
+        <article class="role-panel ops-panel stage-in stage-delay-4" data-testid="demo-panel-ops">
           <div class="panel-head">
             <span>运维窗口</span>
             <ATag color="green">运维人员</ATag>
@@ -461,7 +469,7 @@ onBeforeUnmount(stopAuto);
           </div>
         </article>
 
-        <article class="role-panel admin-panel stage-in stage-delay-5">
+        <article class="role-panel admin-panel stage-in stage-delay-5" data-testid="demo-panel-admin">
           <div class="panel-head">
             <span>管理/审计窗口</span>
             <ATag color="gold">管理员 / 审计员</ATag>
@@ -499,7 +507,7 @@ onBeforeUnmount(stopAuto);
         </article>
       </div>
 
-      <section class="timeline-card stage-in stage-delay-5">
+      <section class="timeline-card stage-in stage-delay-5" data-testid="demo-timeline">
         <div class="panel-head">
           <span>闭环时间线</span>
           <ATag :color="isFinished ? 'green' : 'blue'">{{ isFinished ? '已完成' : '演示中' }}</ATag>

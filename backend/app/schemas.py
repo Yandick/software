@@ -20,6 +20,12 @@ class KnowledgeStatusUpdate(BaseModel):
     review_note: str = ""
 
 
+class KnowledgeSensitiveCheckRequest(BaseModel):
+    title: str = ""
+    content: str = ""
+    tags: str = ""
+
+
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1)
     enable_thinking: bool | None = None

@@ -124,12 +124,30 @@ export function changeKnowledgeStatus(id: number, status: string, reviewNote = '
   return requestClient.post<any>(`/knowledge/${id}/status`, { review_note: reviewNote, status });
 }
 
+export function checkKnowledgeSensitive(data: Record<string, any>) {
+  return requestClient.post<any>('/knowledge/sensitive-check', data);
+}
+
+export function uploadKnowledgeDocument(file: File, data: Record<string, any> = {}) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('title', data.title || '');
+  formData.append('tags', data.tags || '');
+  return requestClient.post<any>('/knowledge/documents/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+}
+
 export function getStats() {
   return requestClient.get<any>('/audit/stats');
 }
 
 export function getAuditLogs(params: Record<string, any> = {}) {
   return requestClient.get<any>('/audit/logs', { params });
+}
+
+export function exportAuditLogs(params: Record<string, any> = {}) {
+  return requestClient.get<any>('/audit/export', { params });
 }
 
 export function evaluateRag() {

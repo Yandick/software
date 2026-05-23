@@ -149,10 +149,18 @@ VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 CUDA_VISIBLE_DEVICES=6 
 | `VLLM_MAX_MODEL_LEN` | `40960` | vLLM 最大上下文长度 |
 | `OPS_MODEL_PATH` | `models/qwen3-1.7b` | 本地模型路径 |
 | `OPS_VLLM_MODEL_NAME` | `qwen3-1.7b` | vLLM served model name |
+| `OPS_ENVIRONMENT` | `development` | 运行环境；设为 `production` 时启用安全配置校验 |
+| `OPS_JWT_SECRET` | 开发默认值 | JWT 签名密钥；生产环境必须设置为非默认且不少于 32 字符 |
+| `OPS_SEED_DEMO_ACCOUNTS` | `true` | 是否写入内置演示账号；生产环境必须设为 `false` |
+| `OPS_ADMIN_PASSWORD` | 无 | `scripts/create_admin.py` 非交互模式读取的管理员初始密码 |
 | `BACKEND_PORT` | `8010` | 后端端口 |
 | `FRONTEND_PORT` | `5666` | 前端端口 |
 
+配置样例见 `.env.example`。生产部署说明见 `docs/deployment.md`。
+
 ## 演示账号
+
+以下账号只用于课程 Demo。生产部署请设置 `OPS_ENVIRONMENT=production`、配置强随机 `OPS_JWT_SECRET`，并设置 `OPS_SEED_DEMO_ACCOUNTS=false`。
 
 | 角色 | 账号 | 密码 |
 | --- | --- | --- |
@@ -160,6 +168,17 @@ VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 CUDA_VISIBLE_DEVICES=6 
 | 运维人员 | `ops` | `ops123` |
 | 普通用户 | `user` | `user123` |
 | 审计员 | `auditor` | `audit123` |
+
+关闭内置 Demo 账号 seed 后，可用离线脚本创建第一个生产管理员：
+
+```bash
+OPS_ENVIRONMENT=production \
+OPS_SEED_DEMO_ACCOUNTS=false \
+OPS_JWT_SECRET=<生产 JWT secret> \
+python scripts/create_admin.py --username admin --real-name "系统管理员" --department "信息技术部"
+```
+
+默认不会覆盖已有账号；需要轮换同名管理员密码时显式加 `--replace`。
 
 ## 依赖检查
 
@@ -169,9 +188,68 @@ python scripts/check_dependencies.py
 
 如果缺少依赖，按提示安装即可。项目不绑定固定 conda 环境名；只要求在同一个已激活环境中具备 Python、vLLM、Node.js 和 pnpm。
 
+## 工程测试与迁移
+
+后端正式测试入口为 pytest：
+
+```bash
+python -m pytest
+```
+
+当前测试使用临时 SQLite 和 mock LLM，不依赖真实 vLLM/GPU。旧脚本入口仍保留：
+
+```bash
+python scripts/test_agent_react.py
+```
+
+数据库迁移已建立 Alembic baseline，新部署可运行：
+
+```bash
+alembic upgrade head
+```
+
+旧演示库如果已经由 `init_db()` 创建过完整表结构，可评估后执行：
+
+```bash
+alembic stamp head
+```
+
+密码存储已从单次 SHA-256 升级为 Argon2id；旧 SHA-256 哈希仍可登录，登录成功后会自动升级。
+
+## 交付前验收
+
+服务启动后可运行一键验收脚本：
+
+```bash
+python scripts/run_acceptance.py
+```
+
+该脚本会检查后端健康、vLLM 就绪、RAG smoke test、知识敏感信息检查、12 步闭环 Demo 和审计 CSV 导出。若刚更新过代码，请先重启后端；详细清单见 `docs/final-acceptance-checklist.md`。
+
+## 多窗口 Demo 自动化
+
+项目提供 Playwright Demo driver，用于自动打开多角色窗口并按步骤点击 `/ops/demo` 前端按钮：
+
+```bash
+cd frontend
+npm exec --yes pnpm@10.33.0 -- install
+npm exec --yes pnpm@10.33.0 -- exec playwright install chromium
+npm exec --yes pnpm@10.33.0 -- demo:playwright -- --multi-window --keep-open
+```
+
+默认会打开普通用户、运维人员、管理员 Demo、审计员四个窗口；管理员窗口逐步推进 12 步闭环，其余窗口会随步骤刷新展示工单、门户和审计变化。只想录制现有一屏四宫格时可运行：
+
+```bash
+cd frontend
+npm exec --yes pnpm@10.33.0 -- demo:playwright -- --single-window
+```
+
 ## 开发与任务文档
 
 - `docs/task-checklist.md`：任务清单和完成度，每次继续开发前先看这里。
+- `docs/final-acceptance-checklist.md`：正式录屏和答辩前的一键验收清单。
+- `docs/deployment.md`：生产配置、数据库迁移、管理员初始化和 systemd 示例。
+- `docs/engineering-standards.md`：工程分层、测试、迁移和安全规范。
 - `docs/code-style.md`：代码与注释规范。
 - `docs/dependencies.md`：依赖说明。
 - `docs/development-review.md`：审查与整改记录。

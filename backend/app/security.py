@@ -1,6 +1,4 @@
 from datetime import datetime, timedelta, timezone
-import hashlib
-import hmac
 from typing import Any
 
 import jwt
@@ -9,16 +7,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import get_settings
 from .database import get_user_by_username
+from .passwords import hash_password, password_needs_rehash, verify_password
 
 security = HTTPBearer(auto_error=False)
-
-
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return hmac.compare_digest(hash_password(password), password_hash)
 
 
 def create_access_token(subject: str, extra: dict[str, Any] | None = None) -> str:

@@ -306,6 +306,7 @@ class RagService:
     def _match_reason(self, item: dict[str, Any], matched_terms: list[str], detail: dict[str, Any]) -> str:
         source_label = {
             "case": "历史处理案例",
+            "document": "上传文档",
             "faq": "FAQ",
             "manual": "操作手册",
             "policy": "制度流程",

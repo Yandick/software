@@ -19,13 +19,14 @@ def main() -> None:
 
         from backend.app.config import get_settings
         from backend.app.database import _hash_password, connect, init_db, utc_now
-        from backend.app.services.llm_service import LLMService
+        from backend.app.services.llm_service import LLMService, llm_service
+        from backend.app.services import issues_service
         import backend.app.main as app_main
 
         get_settings.cache_clear()
         init_db()
-        app_main.UPLOAD_DIR = Path(tmpdir) / "uploads"
-        app_main.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        issues_service.UPLOAD_DIR = Path(tmpdir) / "uploads"
+        issues_service.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         with connect() as conn:
             conn.execute(
                 "insert into users(username,password_hash,real_name,role,department,created_at) values(?,?,?,?,?,?)",
@@ -106,8 +107,8 @@ def main() -> None:
                 "llm_status": "fake-extract",
             }
 
-        app_main.llm_service.generate = fake_generate
-        app_main.llm_service.extract_issue_draft = fake_extract_issue_draft
+        llm_service.generate = fake_generate
+        llm_service.extract_issue_draft = fake_extract_issue_draft
         client = TestClient(app_main.app)
 
         login = client.post("/api/auth/login", json={"username": "user", "password": "user123"})
@@ -203,6 +204,23 @@ def main() -> None:
         assert auditor_login.status_code == 200, auditor_login.text
         auditor_headers = {"Authorization": f"Bearer {auditor_login.json()['access_token']}"}
 
+        sensitive_check = client.post(
+            "/api/knowledge/sensitive-check",
+            json={"title": "VPN 案例", "content": "用户电话 13800138000，password=abc123", "tags": "VPN,案例"},
+            headers=admin_headers,
+        )
+        assert sensitive_check.status_code == 200, sensitive_check.text
+        sensitive_body = sensitive_check.json()
+        assert sensitive_body["blocking"] is True
+        assert "[手机号已脱敏]" in sensitive_body["redacted"]["content"]
+
+        sensitive_publish = client.post(
+            "/api/knowledge",
+            json={"title": "敏感发布测试", "content": "用户电话 13800138000", "status": "published"},
+            headers=admin_headers,
+        )
+        assert sensitive_publish.status_code == 400, sensitive_publish.text
+
         cross_write = client.post(
             "/api/qa/ask",
             json={"question": question, "conversation_id": conversation_id},
@@ -222,6 +240,18 @@ def main() -> None:
         assert knowledge.json()["status"] == "pending_review"
         publish_by_ops = client.post(f"/api/knowledge/{knowledge.json()['id']}/status", json={"status": "published"}, headers=ops_headers)
         assert publish_by_ops.status_code == 403, publish_by_ops.text
+        sensitive_candidate = client.post(
+            "/api/knowledge",
+            json={"title": "待脱敏候选", "content": "用户电话 13800138000", "status": "pending_review"},
+            headers=ops_headers,
+        )
+        assert sensitive_candidate.status_code == 200, sensitive_candidate.text
+        blocked_publish = client.post(
+            f"/api/knowledge/{sensitive_candidate.json()['id']}/status",
+            json={"status": "published"},
+            headers=admin_headers,
+        )
+        assert blocked_publish.status_code == 400, blocked_publish.text
         ops_update_candidate = client.put(
             f"/api/knowledge/{knowledge.json()['id']}",
             json={"title": "ops 候选更新", "content": "更新候选内容", "status": "published"},
@@ -268,6 +298,14 @@ def main() -> None:
         assert demo_body["ops_window"]["issue"]["status"] == "closed"
         assert demo_body["admin_window"]["knowledge"]["status"] == "published"
         assert demo_body["admin_window"]["audit"]
+        demo_issue_id = demo_body["ops_window"]["issue"]["id"]
+        demo_conversation_id = demo_body["conversation_id"]
+        user_demo_issues = client.get("/api/issues", headers=headers)
+        assert user_demo_issues.status_code == 200, user_demo_issues.text
+        assert any(item["id"] == demo_issue_id for item in user_demo_issues.json())
+        user_demo_conversations = client.get("/api/qa/conversations", headers=headers)
+        assert user_demo_conversations.status_code == 200, user_demo_conversations.text
+        assert any(item["id"] == demo_conversation_id for item in user_demo_conversations.json())
 
         user_stats = client.get("/api/audit/stats", headers=headers)
         assert user_stats.status_code == 200, user_stats.text
@@ -275,6 +313,9 @@ def main() -> None:
         auditor_stats = client.get("/api/audit/stats", headers=auditor_headers)
         assert auditor_stats.status_code == 200, auditor_stats.text
         assert "accounts" in auditor_stats.json()
+        audit_export = client.get("/api/audit/export", headers=auditor_headers)
+        assert audit_export.status_code == 200, audit_export.text
+        assert "log_type,id,event_type" in audit_export.json()["content"]
 
         print(
             {
