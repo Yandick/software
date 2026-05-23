@@ -714,6 +714,20 @@ onMounted(async () => {
   position: relative;
 }
 
+.ops-chat-page :deep(.ant-tag) {
+  align-items: center;
+  display: inline-flex;
+  height: auto;
+  line-height: 1.35;
+  margin-inline-end: 0;
+  max-width: 100%;
+  min-height: 22px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .ops-chat-page::before {
   background:
     linear-gradient(90deg, rgb(15 23 42 / 6%) 1px, transparent 1px),
@@ -1010,7 +1024,10 @@ onMounted(async () => {
   border-radius: 16px;
   box-shadow: 0 14px 34px rgb(15 23 42 / 7%);
   max-width: min(780px, 86%);
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 14px 16px;
+  word-break: break-word;
 }
 
 .message-meta {
@@ -1093,14 +1110,15 @@ onMounted(async () => {
 }
 
 .agent-trace li {
-  align-items: center;
+  align-items: start;
   background: rgb(255 255 255 / 74%);
   border: 1px solid #ccfbf1;
   border-radius: 10px;
   display: grid;
   gap: 3px;
-  grid-template-columns: 64px 120px minmax(0, 1fr);
+  grid-template-columns: minmax(56px, 0.6fr) minmax(96px, 1fr) minmax(0, 2.4fr);
   list-style: none;
+  min-width: 0;
   padding: 8px 10px;
 }
 
@@ -1108,6 +1126,9 @@ onMounted(async () => {
 .agent-trace em,
 .agent-trace small {
   display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-trace strong {
@@ -1172,6 +1193,7 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .reference-item-head {
@@ -1180,6 +1202,9 @@ onMounted(async () => {
 
 .reference-item-head strong {
   color: #0f172a;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .reference-item p {

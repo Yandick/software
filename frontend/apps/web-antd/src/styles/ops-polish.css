@@ -534,6 +534,196 @@ html:not(.dark) .ops-chat-page .ant-tag-green {
   color: #166534 !important;
 }
 
+html:not(.dark) .ant-tag-green {
+  background: #f0fdf4 !important;
+  border-color: #86efac !important;
+  color: #166534 !important;
+}
+
+html:not(.dark) .ant-tag-orange,
+html:not(.dark) .ant-tag-gold {
+  background: #fff7ed !important;
+  border-color: #fdba74 !important;
+  color: #9a3412 !important;
+}
+
+html:not(.dark) .ant-tag-cyan,
+html:not(.dark) .ant-tag-geekblue,
+html:not(.dark) .ant-tag-processing {
+  background: #eff6ff !important;
+  border-color: #93c5fd !important;
+  color: #1e40af !important;
+}
+
+.dark .ops-chat-page [class~='bg-white/70'] {
+  background: rgb(8 20 31 / 76%) !important;
+  border: 1px solid rgb(148 163 184 / 18%);
+  color: #e5f4f4 !important;
+}
+
+.dark .ops-chat-page [class~='bg-white/70'] .text-slate-600 {
+  color: #b6c7d8 !important;
+}
+
+html.dark .portal-page {
+  --accent: #14b8a6;
+  --accent-soft: rgb(20 184 166 / 18%);
+  --amber: #f59e0b;
+  --border: rgb(148 163 184 / 18%);
+  --danger: #fb7185;
+  --ink: #e5f4f4;
+  --muted: #9fb3c8;
+  --panel: rgb(15 23 42 / 82%);
+  --surface: #050b12;
+  background:
+    linear-gradient(120deg, rgb(34 211 238 / 9%) 0 1px, transparent 1px 72px),
+    linear-gradient(155deg, #050b12 0%, #081a24 48%, #17110b 100%) !important;
+  color: var(--ink) !important;
+}
+
+html.dark .portal-page .portal-topbar,
+html.dark .portal-page .tool-panel,
+html.dark .portal-page .conversation-panel,
+html.dark .portal-page .issues-workspace,
+html.dark .portal-page .stat-tile,
+html.dark .portal-page .model-tile,
+html.dark .portal-page .issue-card,
+html.dark .portal-page .issue-row,
+html.dark .portal-page .progress-panel {
+  background: var(--panel) !important;
+  border-color: var(--border) !important;
+  color: var(--ink) !important;
+}
+
+html.dark .portal-page .portal-nav,
+html.dark .portal-page .user-chip,
+html.dark .portal-page .text-button,
+html.dark .portal-page .icon-button,
+html.dark .portal-page .outline-button,
+html.dark .portal-page .ghost-button,
+html.dark .portal-page .small-button,
+html.dark .portal-page .filter-button,
+html.dark .portal-page .service-tile,
+html.dark .portal-page .history-row,
+html.dark .portal-page .message-bubble,
+html.dark .portal-page .decision-box,
+html.dark .portal-page .reference-list,
+html.dark .portal-page .reference-item,
+html.dark .portal-page .composer,
+html.dark .portal-page .issue-filter,
+html.dark .portal-page .solution-box,
+html.dark .portal-page .event-list div {
+  background: rgb(8 20 31 / 76%) !important;
+  border-color: var(--border) !important;
+  color: var(--ink) !important;
+}
+
+html.dark .portal-page .brand-block strong,
+html.dark .portal-page .user-chip strong,
+html.dark .portal-page .stat-tile strong,
+html.dark .portal-page .model-tile strong,
+html.dark .portal-page .panel-heading h2,
+html.dark .portal-page .chat-titlebar h1,
+html.dark .portal-page .workspace-heading h1,
+html.dark .portal-page .message-meta strong,
+html.dark .portal-page .issue-card-head strong,
+html.dark .portal-page .issue-title strong,
+html.dark .portal-page .event-list strong,
+html.dark .portal-page .reference-item strong {
+  color: #f8fafc !important;
+}
+
+html.dark .portal-page .nav-button,
+html.dark .portal-page .filter-button {
+  color: var(--muted) !important;
+}
+
+html.dark .portal-page .nav-button.active,
+html.dark .portal-page .filter-button.active,
+html.dark .portal-page .history-row.active {
+  background: rgb(8 47 73 / 82%) !important;
+  color: #99f6e4 !important;
+}
+
+html.dark .portal-page .brand-block small,
+html.dark .portal-page .user-chip small,
+html.dark .portal-page .stat-tile span,
+html.dark .portal-page .model-tile span,
+html.dark .portal-page .service-tile small,
+html.dark .portal-page .history-row span,
+html.dark .portal-page .history-row small,
+html.dark .portal-page .chat-titlebar p,
+html.dark .portal-page .workspace-heading p,
+html.dark .portal-page .message-meta small,
+html.dark .portal-page .reference-title small,
+html.dark .portal-page .reference-item p,
+html.dark .portal-page .issue-card p,
+html.dark .portal-page .issue-main > p,
+html.dark .portal-page .issue-meta,
+html.dark .portal-page .issue-grid,
+html.dark .portal-page .progress-track,
+html.dark .portal-page .event-list small,
+html.dark .portal-page .rating-text {
+  color: var(--muted) !important;
+}
+
+html.dark .portal-page .message-user .message-bubble {
+  background: linear-gradient(135deg, #0f766e, #115e59) !important;
+  border-color: rgb(94 234 212 / 34%) !important;
+  color: #fff !important;
+}
+
+html.dark .portal-page .message-system .message-bubble {
+  background: rgb(69 26 3 / 64%) !important;
+  border-color: rgb(245 158 11 / 26%) !important;
+}
+
+html.dark .portal-page .progress-track span {
+  background: rgb(15 23 42 / 78%) !important;
+  color: var(--muted) !important;
+}
+
+html.dark .portal-page .progress-track span.active {
+  background: rgb(20 184 166 / 18%) !important;
+  color: #99f6e4 !important;
+}
+
+html.dark .portal-page .composer-input {
+  background: rgb(2 6 23 / 72%) !important;
+  border-color: #14b8a6 !important;
+  color: #f8fafc !important;
+}
+
+html.dark .portal-page .composer-input::placeholder {
+  color: #64748b !important;
+}
+
+html.dark .portal-page .suggestion-chip,
+html.dark .portal-page .clarify-list button {
+  background: rgb(8 47 73 / 72%) !important;
+  border-color: rgb(103 232 249 / 24%) !important;
+  color: #a5f3fc !important;
+}
+
+html.dark .portal-page .ant-tag-default {
+  background: rgb(15 23 42 / 78%) !important;
+  border-color: rgb(148 163 184 / 24%) !important;
+  color: #cbd5e1 !important;
+}
+
+html.dark .portal-page .ant-tag-green {
+  background: rgb(20 83 45 / 38%) !important;
+  border-color: rgb(74 222 128 / 34%) !important;
+  color: #bbf7d0 !important;
+}
+
+html.dark .portal-page .ant-tag-orange,
+html.dark .portal-page .ant-tag-gold {
+  background: rgb(120 53 15 / 42%) !important;
+  border-color: rgb(251 191 36 / 34%) !important;
+  color: #fde68a !important;
+}
+
 @media (max-width: 1180px) {
   .issue-page > .mb-5.rounded-3xl,
   .account-page > .mb-5.rounded-3xl,

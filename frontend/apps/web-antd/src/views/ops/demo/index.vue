@@ -792,6 +792,21 @@ onBeforeUnmount(stopAuto);
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+}
+
+.demo-page :deep(.ant-tag) {
+  align-items: center;
+  display: inline-flex;
+  height: auto;
+  line-height: 1.35;
+  margin-inline-end: 0;
+  max-width: 100%;
+  min-height: 22px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .hero-actions .white-action-button,
@@ -1274,6 +1289,10 @@ onBeforeUnmount(stopAuto);
 .assist-box b,
 .solution-box b {
   color: #0f172a;
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-feed,
@@ -1342,7 +1361,8 @@ onBeforeUnmount(stopAuto);
   align-items: start;
   display: grid;
   gap: 6px;
-  grid-template-columns: 52px 82px minmax(0, 1fr);
+  grid-template-columns: minmax(44px, 0.55fr) minmax(82px, 0.9fr) minmax(0, 2.4fr);
+  min-width: 0;
 }
 
 .trace-list strong {
@@ -1352,6 +1372,18 @@ onBeforeUnmount(stopAuto);
 .trace-list span {
   color: #a16207;
   font-weight: 900;
+}
+
+.trace-list strong,
+.trace-list span,
+.trace-list p,
+.audit-list span,
+.audit-list p,
+.timeline-item strong,
+.timeline-item p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .assist-box ul,
@@ -1371,12 +1403,16 @@ onBeforeUnmount(stopAuto);
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
+  min-width: 0;
   padding: 8px;
 }
 
 .stats-grid strong,
 .stats-grid span {
   display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .stats-grid strong {

@@ -378,7 +378,7 @@ onMounted(load);
                   <span>处理人：{{ item.handled_by_name || '待分派' }}</span>
                   <span>受理耗时：{{ item.response_minutes === null || item.response_minutes === undefined ? '未受理' : `${item.response_minutes} 分钟` }}</span>
                   <span>处理耗时：{{ item.handling_minutes === null || item.handling_minutes === undefined ? '未完成' : `${item.handling_minutes} 分钟` }}</span>
-                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" target="_blank">
+                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
                     附件/截图：{{ attachmentName(item.attachment_url) }}
                   </a>
                   <span v-if="item.user_satisfaction_score">用户评价：{{ item.user_satisfaction_score }} 分</span>

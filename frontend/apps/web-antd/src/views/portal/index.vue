@@ -823,7 +823,7 @@ onMounted(async () => {
                 <div class="issue-meta">
                   <span>{{ item.updated_at }}</span>
                   <span>{{ item.category || 'general' }}</span>
-                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" target="_blank">
+                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
                     附件
                   </a>
                 </div>
@@ -878,7 +878,7 @@ onMounted(async () => {
                 <span>处理人：{{ item.handled_by_name || '待分派' }}</span>
                 <span>处理耗时：{{ item.handling_minutes === null || item.handling_minutes === undefined ? '未完成' : `${item.handling_minutes} 分钟` }}</span>
               </div>
-              <a v-if="item.attachment_url" class="attachment-link mt-3" :href="item.attachment_url" target="_blank">
+              <a v-if="item.attachment_url" class="attachment-link mt-3" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
                 <IconifyIcon icon="lucide:paperclip" />
                 <span>查看附件：{{ attachmentName(item.attachment_url) }}</span>
               </a>
@@ -976,7 +976,7 @@ onMounted(async () => {
               </a-button>
             </a-upload>
           </div>
-          <a v-if="handoffForm.attachment_url" class="attachment-link mt-2" :href="handoffForm.attachment_url" target="_blank">
+          <a v-if="handoffForm.attachment_url" class="attachment-link mt-2" :href="handoffForm.attachment_url" rel="noopener noreferrer" target="_blank">
             <IconifyIcon icon="lucide:paperclip" />
             <span>预览/下载：{{ attachmentName(handoffForm.attachment_url) }}</span>
           </a>
@@ -1194,8 +1194,10 @@ button {
   gap: 16px;
   margin: 0 auto;
   max-width: 1640px;
+  min-width: 0;
   overflow-x: hidden;
   padding: 16px 24px 24px;
+  width: 100%;
 }
 
 .status-band {
@@ -1250,6 +1252,8 @@ button {
   gap: 16px;
   grid-template-columns: 300px minmax(0, 1fr) 320px;
   min-height: calc(100vh - 180px);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .left-rail,
@@ -1265,6 +1269,7 @@ button {
 
 .right-rail {
   align-content: start;
+  overflow: hidden;
 }
 
 .tool-panel,
@@ -1277,6 +1282,7 @@ button {
 }
 
 .tool-panel {
+  overflow: hidden;
   padding: 14px;
 }
 
@@ -1354,6 +1360,8 @@ h2 {
 .history-row span,
 .history-row small {
   display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .service-tile small,
@@ -1618,11 +1626,12 @@ h2 {
 
 .suggestion-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
   max-width: 100%;
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
   padding-bottom: 2px;
 }
 
@@ -1630,9 +1639,10 @@ h2 {
   background: #f0fdfa;
   border: 1px solid #99f6e4;
   color: #115e59;
-  flex: 0 0 auto;
-  max-width: 280px;
+  flex: 1 1 220px;
+  max-width: 100%;
   min-height: 32px;
+  min-width: 0;
   overflow: hidden;
   padding: 0 10px;
   text-overflow: ellipsis;
@@ -1668,6 +1678,8 @@ h2 {
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
   padding: 10px;
 }
 
@@ -1676,8 +1688,11 @@ h2 {
 }
 
 .issue-card-head {
+  display: grid;
   gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
   justify-content: space-between;
+  min-width: 0;
 }
 
 .issue-card-head strong,
@@ -1688,6 +1703,10 @@ h2 {
   white-space: nowrap;
 }
 
+.issue-card-head :deep(.ant-tag) {
+  max-width: 100%;
+}
+
 .issue-card p {
   color: #475467;
   display: -webkit-box;
@@ -1695,6 +1714,7 @@ h2 {
   line-height: 1.55;
   margin-top: 8px;
   overflow: hidden;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
 }
@@ -1706,6 +1726,8 @@ h2 {
   font-size: 12px;
   gap: 8px;
   margin-top: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .attachment-link {
@@ -1784,6 +1806,12 @@ h2 {
   gap: 16px;
   grid-template-columns: minmax(0, 1fr) 320px;
   padding: 14px;
+}
+
+.issue-main,
+.progress-panel {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .issue-title {
@@ -1879,136 +1907,6 @@ h2 {
 .rating-text {
   color: var(--muted);
   margin-left: 10px;
-}
-
-:global(.dark) .portal-page {
-  --accent: #14b8a6;
-  --accent-soft: rgb(20 184 166 / 18%);
-  --amber: #f59e0b;
-  --border: rgb(148 163 184 / 18%);
-  --danger: #fb7185;
-  --ink: #e5f4f4;
-  --muted: #9fb3c8;
-  --panel: rgb(15 23 42 / 82%);
-  --surface: #050b12;
-  background:
-    linear-gradient(120deg, rgb(34 211 238 / 9%) 0 1px, transparent 1px 72px),
-    linear-gradient(155deg, #050b12 0%, #081a24 48%, #17110b 100%);
-}
-
-:global(.dark) .portal-topbar,
-:global(.dark) .tool-panel,
-:global(.dark) .conversation-panel,
-:global(.dark) .issues-workspace,
-:global(.dark) .stat-tile,
-:global(.dark) .model-tile,
-:global(.dark) .issue-card,
-:global(.dark) .issue-row,
-:global(.dark) .progress-panel {
-  background: var(--panel);
-  border-color: var(--border);
-  color: var(--ink);
-}
-
-:global(.dark) .portal-nav,
-:global(.dark) .user-chip,
-:global(.dark) .text-button,
-:global(.dark) .icon-button,
-:global(.dark) .outline-button,
-:global(.dark) .ghost-button,
-:global(.dark) .small-button,
-:global(.dark) .filter-button,
-:global(.dark) .service-tile,
-:global(.dark) .history-row,
-:global(.dark) .message-bubble,
-:global(.dark) .decision-box,
-:global(.dark) .reference-list,
-:global(.dark) .reference-item,
-:global(.dark) .composer,
-:global(.dark) .issue-filter,
-:global(.dark) .solution-box,
-:global(.dark) .event-list div {
-  background: rgb(8 20 31 / 76%);
-  border-color: var(--border);
-  color: var(--ink);
-}
-
-:global(.dark) .nav-button,
-:global(.dark) .filter-button {
-  color: var(--muted);
-}
-
-:global(.dark) .nav-button.active,
-:global(.dark) .filter-button.active,
-:global(.dark) .history-row.active {
-  background: rgb(8 47 73 / 82%);
-  color: #99f6e4;
-}
-
-:global(.dark) .brand-block small,
-:global(.dark) .user-chip small,
-:global(.dark) .stat-tile span,
-:global(.dark) .model-tile span,
-:global(.dark) .service-tile small,
-:global(.dark) .history-row span,
-:global(.dark) .history-row small,
-:global(.dark) .chat-titlebar p,
-:global(.dark) .workspace-heading p,
-:global(.dark) .message-meta small,
-:global(.dark) .reference-title small,
-:global(.dark) .reference-item p,
-:global(.dark) .issue-card p,
-:global(.dark) .issue-main > p,
-:global(.dark) .issue-meta,
-:global(.dark) .issue-grid,
-:global(.dark) .progress-track,
-:global(.dark) .event-list small,
-:global(.dark) .rating-text {
-  color: var(--muted);
-}
-
-:global(.dark) .event-list strong,
-:global(.dark) .issue-title strong,
-:global(.dark) .reference-item strong {
-  color: #f8fafc;
-}
-
-:global(.dark) .message-user .message-bubble {
-  background: linear-gradient(135deg, #0f766e, #115e59);
-  border-color: rgb(94 234 212 / 34%);
-  color: #fff;
-}
-
-:global(.dark) .message-system .message-bubble {
-  background: rgb(69 26 3 / 64%);
-  border-color: rgb(245 158 11 / 26%);
-}
-
-:global(.dark) .progress-track span {
-  background: rgb(15 23 42 / 78%);
-  color: var(--muted);
-}
-
-:global(.dark) .progress-track span.active {
-  background: rgb(20 184 166 / 18%);
-  color: #99f6e4;
-}
-
-:global(.dark) .composer-input {
-  background: rgb(2 6 23 / 72%);
-  border-color: #14b8a6;
-  color: #f8fafc;
-}
-
-:global(.dark) .composer-input::placeholder {
-  color: #64748b;
-}
-
-:global(.dark) .suggestion-chip,
-:global(.dark) .clarify-list button {
-  background: rgb(8 47 73 / 72%);
-  border-color: rgb(103 232 249 / 24%);
-  color: #a5f3fc;
 }
 
 @media (max-width: 1320px) {
