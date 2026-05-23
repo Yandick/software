@@ -6,7 +6,6 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter ops-employee-frontend build",
-    "demo:playwright": "node scripts/run-demo-playwright.mjs",
     "dev": "pnpm --filter ops-employee-frontend dev",
     "postinstall": "pnpm -r run stub --if-present",
     "preview": "pnpm --filter ops-employee-frontend preview",
@@ -15,7 +14,6 @@
   "devDependencies": {
     "@tsdown/css": "catalog:",
     "@types/node": "catalog:",
-    "playwright": "catalog:",
     "@vben/tailwind-config": "workspace:*",
     "@vben/tsconfig": "workspace:*",
     "@vben/vite-config": "workspace:*",

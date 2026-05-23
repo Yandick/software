@@ -35,7 +35,6 @@ catalog:
   '@jspm/generator': ^2.13.0
   '@manypkg/get-packages': ^3.1.0
   '@nolebase/vitepress-plugin-git-changelog': ^2.18.2
-  '@playwright/test': ^1.59.1
   '@pnpm/workspace.read-manifest': ^1000.3.1
   '@stylistic/stylelint-plugin': ^5.1.0
   '@tailwindcss/typography': ^0.5.19
@@ -135,7 +134,6 @@ catalog:
   pinia: ^3.0.4
   pinia-plugin-persistedstate: ^4.7.1
   pkg-types: ^2.3.1
-  playwright: ^1.59.1
   postcss: ^8.5.9
   postcss-html: ^1.8.1
   postcss-scss: ^4.0.9

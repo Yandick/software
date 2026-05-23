@@ -715,6 +715,7 @@ onMounted(async () => {
 }
 
 .chat-shell {
+  align-items: start;
   display: grid;
   gap: 18px;
   grid-template-columns: 360px minmax(0, 1fr);
@@ -734,7 +735,13 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: calc(100vh - 136px);
+  min-height: 720px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 16px;
+  position: sticky;
+  top: 20px;
 }
 
 .brand-card,
@@ -1256,6 +1263,14 @@ onMounted(async () => {
 @media (max-width: 1180px) {
   .chat-shell {
     grid-template-columns: 1fr;
+  }
+
+  .chat-sidebar {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+    overflow: visible;
+    position: static;
   }
 
   .chat-main {

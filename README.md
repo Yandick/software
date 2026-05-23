@@ -226,23 +226,15 @@ python scripts/run_acceptance.py
 
 该脚本会检查后端健康、vLLM 就绪、RAG smoke test、知识敏感信息检查、12 步闭环 Demo 和审计 CSV 导出。若刚更新过代码，请先重启后端；详细清单见 `docs/final-acceptance-checklist.md`。
 
-## 多窗口 Demo 自动化
+## 单页多角色闭环 Demo
 
-项目提供 Playwright Demo driver，用于自动打开多角色窗口并按步骤点击 `/ops/demo` 前端按钮：
-
-```bash
-cd frontend
-npm exec --yes pnpm@10.33.0 -- install
-npm exec --yes pnpm@10.33.0 -- exec playwright install chromium
-npm exec --yes pnpm@10.33.0 -- demo:playwright -- --multi-window --keep-open
-```
-
-默认会打开普通用户、运维人员、管理员 Demo、审计员四个窗口；管理员窗口逐步推进 12 步闭环，其余窗口会随步骤刷新展示工单、门户和审计变化。只想录制现有一屏四宫格时可运行：
+管理员登录后进入 `/ops/demo`，即可在一个浏览器页面内查看普通用户、数字员工、运维人员和管理员/审计员四个角色视角。页面支持重置链路、单步执行和自动推进，固定演示 VPN 证书过期问题从用户申告到知识发布、审计汇总的 12 步闭环。
 
 ```bash
-cd frontend
-npm exec --yes pnpm@10.33.0 -- demo:playwright -- --single-window
+./scripts/start_all.sh
 ```
+
+服务启动后访问前端，使用 `admin / admin123` 登录并打开 `/ops/demo`。
 
 ## 开发与任务文档
 

@@ -69,6 +69,13 @@ const statLabels: Record<string, string> = {
   qa_logs: '问答记录',
 };
 
+const demoWindows = [
+  { account: 'user / user123', fallback: '等待用户发起申告', path: '/portal', role: 'user', title: '普通用户门户' },
+  { account: '云维 Agent', fallback: '等待知识检索与字段抽取', path: '/ops/dashboard', role: 'agent', title: '数字员工服务台' },
+  { account: 'ops / ops123', fallback: '等待人工协同记录进入处理队列', path: '/ops/issues', role: 'ops', title: '运维处理台' },
+  { account: 'admin / admin123', fallback: '等待知识候选和审计汇总', path: '/ops/demo', role: 'admin', title: '管理审计台' },
+] as const;
+
 const panels = computed(() => ({
   admin: state.value.admin_window || {},
   agent: state.value.agent_window || {},
@@ -111,6 +118,13 @@ const adminLatestEvent = computed(() => {
     role: 'admin',
     title: '等待流转',
   };
+});
+
+const focusedRole = computed(() => {
+  const role = currentEvent.value.role;
+  if (role === 'auditor') return 'admin';
+  if (['admin', 'agent', 'ops', 'user'].includes(role)) return role;
+  return '';
 });
 
 const currentStepName = computed(() => {
@@ -161,6 +175,14 @@ function statLabel(key: string | number) {
 
 function latestFor(role: string, fallback: string) {
   return latestEvents.value[role] || { detail: fallback, role, title: '等待流转' };
+}
+
+function windowLatest(window: (typeof demoWindows)[number]) {
+  return window.role === 'admin' ? adminLatestEvent.value : latestFor(window.role, window.fallback);
+}
+
+function isFocused(role: string) {
+  return focusedRole.value === role;
 }
 
 function stepStatus(index: number) {
@@ -352,52 +374,67 @@ onBeforeUnmount(stopAuto);
     </section>
 
     <section class="demo-stage" data-testid="demo-stage">
-      <div class="grid-panels">
-        <article class="role-panel user-panel stage-in stage-delay-2" data-testid="demo-panel-user">
-          <div class="panel-head">
-            <span>用户窗口</span>
-            <ATag color="blue">普通用户</ATag>
-          </div>
-          <h2>申告与状态感知</h2>
-          <div class="live-summary role-sky">
-            <small>最新动态</small>
-            <div class="summary-title-row">
-              <strong>{{ latestFor('user', '等待用户发起申告').title }}</strong>
-              <button class="detail-link" type="button" @click="openEventDetail(latestFor('user', '等待用户发起申告'))">完整</button>
-            </div>
-            <p>{{ latestFor('user', '等待用户发起申告').detail }}</p>
-          </div>
-          <div class="question-card">
-            <span>本次问题</span>
-            <strong>{{ state.question }}</strong>
-          </div>
-          <div ref="userScrollRef" class="panel-scroll chat-feed">
-            <div v-for="(item, index) in panels.user.messages || []" :key="index" :class="['chat-item', item.role]">
-              <strong>{{ item.role === 'user' ? '用户' : '数字员工' }}</strong>
-              <p>{{ item.content }}</p>
-              <div v-if="item.references?.length" class="mini-tags">
-                <ATag v-for="ref in item.references" :key="ref.id" color="geekblue">
-                  {{ ref.title }} · {{ shortScore(ref.score) }}
-                </ATag>
-              </div>
-            </div>
-            <div v-if="!(panels.user.messages || []).length" class="empty-card">等待用户发起问题。</div>
-          </div>
-        </article>
+      <div class="role-desktop">
+        <div class="desktop-dock" aria-label="角色窗口切换">
+          <button
+            v-for="window in demoWindows"
+            :key="window.role"
+            :class="['dock-item', roleClass(window.role), { active: isFocused(window.role) }]"
+            type="button"
+            @click="openEventDetail(windowLatest(window))"
+          >
+            <span class="dock-light"></span>
+            <strong>{{ window.title }}</strong>
+            <small>{{ windowLatest(window).title }}</small>
+          </button>
+        </div>
 
-        <article class="role-panel agent-panel stage-in stage-delay-3" data-testid="demo-panel-agent">
-          <div class="panel-head">
-            <span>数字员工窗口</span>
-            <ATag color="cyan">云维数字员工</ATag>
-          </div>
-          <h2>研判与工具调用</h2>
-          <div class="live-summary role-cyan">
-            <small>最新动态</small>
-            <div class="summary-title-row">
-              <strong>{{ latestFor('agent', '等待知识检索与字段抽取').title }}</strong>
-              <button class="detail-link" type="button" @click="openEventDetail(latestFor('agent', '等待知识检索与字段抽取'))">完整</button>
+        <div class="grid-panels">
+          <article :class="['role-panel user-panel stage-in stage-delay-2', { focused: isFocused('user') }]" data-testid="demo-panel-user">
+            <div class="window-chrome">
+              <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+              <div class="window-address">
+                <strong>普通用户窗口</strong>
+                <span>user / 门户</span>
+              </div>
+              <ATag :color="isFocused('user') ? 'blue' : 'default'">{{ isFocused('user') ? '当前焦点' : '在线' }}</ATag>
             </div>
-            <p>{{ latestFor('agent', '等待知识检索与字段抽取').detail }}</p>
+            <div class="window-status role-sky">
+              <span>用户申告</span>
+              <strong>{{ latestFor('user', '等待用户发起申告').title }}</strong>
+              <button class="detail-link" type="button" @click="openEventDetail(latestFor('user', '等待用户发起申告'))">详情</button>
+            </div>
+            <div class="question-card">
+              <span>本次问题</span>
+              <strong>{{ state.question }}</strong>
+            </div>
+            <div ref="userScrollRef" class="panel-scroll chat-feed">
+              <div v-for="(item, index) in panels.user.messages || []" :key="index" :class="['chat-item', item.role]">
+                <strong>{{ item.role === 'user' ? '用户' : '数字员工' }}</strong>
+                <p>{{ item.content }}</p>
+                <div v-if="item.references?.length" class="mini-tags">
+                  <ATag v-for="ref in item.references" :key="ref.id" color="geekblue">
+                    {{ ref.title }} · {{ shortScore(ref.score) }}
+                  </ATag>
+                </div>
+              </div>
+              <div v-if="!(panels.user.messages || []).length" class="empty-card">等待用户发起问题。</div>
+            </div>
+          </article>
+
+        <article :class="['role-panel agent-panel stage-in stage-delay-3', { focused: isFocused('agent') }]" data-testid="demo-panel-agent">
+          <div class="window-chrome">
+            <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="window-address">
+              <strong>数字员工窗口</strong>
+              <span>云维 / 服务台</span>
+            </div>
+            <ATag :color="isFocused('agent') ? 'cyan' : 'default'">{{ isFocused('agent') ? '当前焦点' : '在线' }}</ATag>
+          </div>
+          <div class="window-status role-cyan">
+            <span>智能研判</span>
+            <strong>{{ latestFor('agent', '等待知识检索与字段抽取').title }}</strong>
+            <button class="detail-link" type="button" @click="openEventDetail(latestFor('agent', '等待知识检索与字段抽取'))">详情</button>
           </div>
           <div class="agent-summary">
             <ATag color="processing">{{ panels.agent.model_status || '等待执行' }}</ATag>
@@ -430,19 +467,19 @@ onBeforeUnmount(stopAuto);
           </div>
         </article>
 
-        <article class="role-panel ops-panel stage-in stage-delay-4" data-testid="demo-panel-ops">
-          <div class="panel-head">
-            <span>运维窗口</span>
-            <ATag color="green">运维人员</ATag>
-          </div>
-          <h2>处理辅助与回访</h2>
-          <div class="live-summary role-emerald">
-            <small>最新动态</small>
-            <div class="summary-title-row">
-              <strong>{{ latestFor('ops', '等待人工协同记录进入处理队列').title }}</strong>
-              <button class="detail-link" type="button" @click="openEventDetail(latestFor('ops', '等待人工协同记录进入处理队列'))">完整</button>
+        <article :class="['role-panel ops-panel stage-in stage-delay-4', { focused: isFocused('ops') }]" data-testid="demo-panel-ops">
+          <div class="window-chrome">
+            <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="window-address">
+              <strong>运维窗口</strong>
+              <span>ops / 处理台</span>
             </div>
-            <p>{{ latestFor('ops', '等待人工协同记录进入处理队列').detail }}</p>
+            <ATag :color="isFocused('ops') ? 'green' : 'default'">{{ isFocused('ops') ? '当前焦点' : '在线' }}</ATag>
+          </div>
+          <div class="window-status role-emerald">
+            <span>运维处理</span>
+            <strong>{{ latestFor('ops', '等待人工协同记录进入处理队列').title }}</strong>
+            <button class="detail-link" type="button" @click="openEventDetail(latestFor('ops', '等待人工协同记录进入处理队列'))">详情</button>
           </div>
           <div ref="opsScrollRef" class="panel-scroll">
             <div v-if="panels.ops.issue?.id" class="issue-card">
@@ -469,19 +506,19 @@ onBeforeUnmount(stopAuto);
           </div>
         </article>
 
-        <article class="role-panel admin-panel stage-in stage-delay-5" data-testid="demo-panel-admin">
-          <div class="panel-head">
-            <span>管理/审计窗口</span>
-            <ATag color="gold">管理员 / 审计员</ATag>
-          </div>
-          <h2>知识发布与审计</h2>
-          <div class="live-summary role-amber">
-            <small>最新动态</small>
-            <div class="summary-title-row">
-              <strong>{{ adminLatestEvent.title }}</strong>
-              <button class="detail-link" type="button" @click="openEventDetail(adminLatestEvent)">完整</button>
+        <article :class="['role-panel admin-panel stage-in stage-delay-5', { focused: isFocused('admin') }]" data-testid="demo-panel-admin">
+          <div class="window-chrome">
+            <div class="window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="window-address">
+              <strong>管理审计窗口</strong>
+              <span>admin / Demo</span>
             </div>
-            <p>{{ adminLatestEvent.detail }}</p>
+            <ATag :color="isFocused('admin') ? 'gold' : 'default'">{{ isFocused('admin') ? '当前焦点' : '在线' }}</ATag>
+          </div>
+          <div class="window-status role-amber">
+            <span>知识审计</span>
+            <strong>{{ adminLatestEvent.title }}</strong>
+            <button class="detail-link" type="button" @click="openEventDetail(adminLatestEvent)">详情</button>
           </div>
           <div ref="adminScrollRef" class="panel-scroll">
             <div v-if="panels.admin.knowledge?.id" class="knowledge-card">
@@ -505,6 +542,7 @@ onBeforeUnmount(stopAuto);
             </ul>
           </div>
         </article>
+        </div>
       </div>
 
       <section class="timeline-card stage-in stage-delay-5" data-testid="demo-timeline">
@@ -555,10 +593,9 @@ onBeforeUnmount(stopAuto);
   color: var(--demo-ink);
   display: grid;
   gap: 12px;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  height: calc(100vh - 88px);
-  min-height: 720px;
-  overflow: hidden;
+  grid-template-rows: auto auto auto;
+  min-height: max(720px, calc(100vh - 88px));
+  overflow: auto;
   padding: 14px;
   position: relative;
 }
@@ -864,16 +901,94 @@ onBeforeUnmount(stopAuto);
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) 360px;
-  min-height: 0;
+  min-height: 760px;
   position: relative;
   z-index: 1;
 }
+
+.role-desktop {
+  background:
+    linear-gradient(135deg, rgb(15 23 42 / 6%), rgb(15 118 110 / 8%)),
+    rgb(255 255 255 / 36%);
+  border: 1px solid rgb(15 23 42 / 8%);
+  border-radius: 22px;
+  display: grid;
+  gap: 10px;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 760px;
+  padding: 10px;
+}
+
+.desktop-dock {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dock-item {
+  align-items: center;
+  background: rgb(255 255 255 / 72%);
+  border: 1px solid rgb(15 23 42 / 10%);
+  border-radius: 14px;
+  cursor: pointer;
+  display: grid;
+  gap: 3px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  transition: all 0.18s ease;
+}
+
+.dock-item strong,
+.dock-item small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-item strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.dock-item small {
+  color: var(--demo-muted);
+  font-size: 11px;
+  grid-column: 2;
+}
+
+.dock-light {
+  background: #94a3b8;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(148 163 184 / 14%);
+  height: 9px;
+  width: 9px;
+}
+
+.dock-item:hover,
+.dock-item.active {
+  background: #fff;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 10%);
+  transform: translateY(-1px);
+}
+
+.dock-item.role-sky.active { border-color: #38bdf8; }
+.dock-item.role-cyan.active { border-color: #22d3ee; }
+.dock-item.role-emerald.active { border-color: #34d399; }
+.dock-item.role-amber.active { border-color: #f59e0b; }
+.dock-item.role-sky .dock-light { background: #38bdf8; }
+.dock-item.role-cyan .dock-light { background: #22d3ee; }
+.dock-item.role-emerald .dock-light { background: #34d399; }
+.dock-item.role-amber .dock-light { background: #f59e0b; }
 
 .grid-panels {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(340px, 1fr));
   min-height: 0;
 }
 
@@ -881,12 +996,16 @@ onBeforeUnmount(stopAuto);
 .timeline-card {
   min-height: 0;
   overflow: hidden;
-  padding: 12px;
+  padding: 10px;
 }
 
 .role-panel {
   display: flex;
   flex-direction: column;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
 }
 
 .role-panel::before {
@@ -902,11 +1021,81 @@ onBeforeUnmount(stopAuto);
 .ops-panel::before { background: linear-gradient(90deg, #34d399, #16a34a); }
 .admin-panel::before { background: linear-gradient(90deg, #fbbf24, #f97316); }
 
+.role-panel.focused {
+  border-color: rgb(15 118 110 / 36%);
+  box-shadow:
+    0 22px 58px rgb(15 23 42 / 16%),
+    0 0 0 3px rgb(20 184 166 / 12%);
+  transform: translateY(-2px);
+}
+
+.window-chrome {
+  align-items: center;
+  background: linear-gradient(135deg, #0f172a, #1e293b);
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 14px;
+  color: #e2e8f0;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-bottom: 6px;
+  min-height: 40px;
+  padding: 7px 9px;
+}
+
+.window-controls {
+  display: flex;
+  gap: 5px;
+}
+
+.window-controls i {
+  border-radius: 50%;
+  display: block;
+  height: 10px;
+  width: 10px;
+}
+
+.window-controls i:nth-child(1) { background: #fb7185; }
+.window-controls i:nth-child(2) { background: #fbbf24; }
+.window-controls i:nth-child(3) { background: #34d399; }
+
+.window-address {
+  min-width: 0;
+}
+
+.window-address strong,
+.window-address span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.window-address strong {
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1.2;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.window-address span {
+  color: rgb(203 213 225 / 82%);
+  font-size: 11px;
+  margin-top: 1px;
+}
+
 .panel-head {
   align-items: center;
   display: flex;
+  flex: 0 0 auto;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+  min-height: 24px;
 }
 
 .panel-head span {
@@ -914,51 +1103,55 @@ onBeforeUnmount(stopAuto);
   font-size: 12px;
   font-weight: 950;
   letter-spacing: 0.08em;
+  line-height: 1.25;
+  white-space: nowrap;
 }
 
-.role-panel h2 {
-  font-size: 17px;
-  font-weight: 950;
-  margin: 0 0 10px;
-}
-
-.live-summary {
+.window-status {
+  align-items: start;
   border: 1px solid rgb(15 23 42 / 9%);
-  border-radius: 12px;
-  margin-bottom: 7px;
-  padding: 8px;
+  border-radius: 10px;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin-bottom: 6px;
+  min-height: 46px;
+  padding: 6px 8px;
 }
 
-.live-summary small {
-  color: var(--demo-muted);
-  display: block;
-  font-size: 10px;
+.window-status span {
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 11px;
   font-weight: 950;
-  letter-spacing: 0.12em;
-  margin-bottom: 4px;
-  text-transform: uppercase;
+  line-height: 1;
+  padding: 5px 8px;
+  white-space: nowrap;
 }
 
-.live-summary strong {
+.window-status strong {
   color: #0f172a;
   display: block;
-  font-size: 14px;
+  font-size: 12px;
+  line-height: 1.35;
   min-width: 0;
-}
-
-.live-summary p {
-  color: #475569;
-  font-size: 11.5px;
-  line-height: 1.45;
-  margin: 4px 0 0;
   overflow-wrap: anywhere;
 }
 
-.summary-title-row {
-  align-items: start;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
+.window-status.role-sky span { background: #0284c7; }
+.window-status.role-cyan span { background: #0891b2; }
+.window-status.role-emerald span { background: #059669; }
+.window-status.role-amber span { background: #d97706; }
+
+.window-status.role-sky { background: linear-gradient(135deg, #eff6ff, #f0f9ff); }
+.window-status.role-cyan { background: linear-gradient(135deg, #ecfeff, #f0fdfa); }
+.window-status.role-emerald { background: linear-gradient(135deg, #ecfdf5, #f7fee7); }
+.window-status.role-amber { background: linear-gradient(135deg, #fffbeb, #fff7ed); }
+
+.window-status .detail-link {
+  font-size: 11px;
 }
 
 .detail-link {
@@ -979,11 +1172,6 @@ onBeforeUnmount(stopAuto);
   position: relative;
 }
 
-.live-summary.role-sky { background: linear-gradient(135deg, #eff6ff, #f0f9ff); }
-.live-summary.role-cyan { background: linear-gradient(135deg, #ecfeff, #f0fdfa); }
-.live-summary.role-emerald { background: linear-gradient(135deg, #ecfdf5, #f7fee7); }
-.live-summary.role-amber { background: linear-gradient(135deg, #fffbeb, #fff7ed); }
-
 .question-card,
 .draft-box,
 .issue-card,
@@ -996,6 +1184,11 @@ onBeforeUnmount(stopAuto);
   border-radius: 12px;
   margin-bottom: 8px;
   padding: 8px;
+}
+
+.question-card,
+.agent-summary {
+  flex: 0 0 auto;
 }
 
 .question-card span {
@@ -1271,6 +1464,10 @@ onBeforeUnmount(stopAuto);
   }
 
   .stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .desktop-dock {
     grid-template-columns: 1fr 1fr;
   }
 }
