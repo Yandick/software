@@ -44,6 +44,11 @@ const canMaintain = computed(() => {
 });
 
 const canPublish = computed(() => userStore.userInfo?.roles?.[0] === 'admin');
+const heroMetrics = computed(() => [
+  { label: '知识条目', value: rows.value.length },
+  { label: '待审核', value: rows.value.filter((item) => item.status === 'pending_review').length },
+  { label: '已发布', value: rows.value.filter((item) => item.status === 'published').length },
+]);
 
 const columns = [
   { dataIndex: 'title', title: '标题', width: 240 },
@@ -298,6 +303,12 @@ onMounted(load);
       <p class="mt-3 max-w-3xl text-white/70">
         常见问答、操作规程、制度流程和已解决案例先作为候选知识沉淀，审核发布后进入数字员工检索范围。
       </p>
+      <div class="ops-hero-metrics">
+        <span v-for="item in heroMetrics" :key="item.label">
+          <b>{{ item.value }}</b>
+          <small>{{ item.label }}</small>
+        </span>
+      </div>
     </div>
 
     <a-alert

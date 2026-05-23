@@ -46,6 +46,15 @@ const feedbackOpen = ref(false);
 const feedbackSubmitting = ref(false);
 const feedbackForm = ref({ feedback: '', id: 0, satisfaction_score: 5 });
 
+const heroMetrics = computed(() => [
+  { label: '当前记录', value: rows.value.length },
+  {
+    label: '处理中',
+    value: rows.value.filter((item) => ['accepted', 'need_user_info', 'pending', 'processing', 'submitted'].includes(item.status)).length,
+  },
+  { label: '已关闭', value: rows.value.filter((item) => item.status === 'closed').length },
+]);
+
 const canHandle = computed(() => {
   const role = userStore.userInfo?.roles?.[0];
   return role === 'admin' || role === 'ops';
@@ -267,6 +276,12 @@ onMounted(load);
       <p class="mt-3 max-w-3xl text-white/70">
         用户提交无法自助解决的问题；运维人员处理、回访，确认解决后自动沉淀为知识案例。
       </p>
+      <div class="ops-hero-metrics">
+        <span v-for="item in heroMetrics" :key="item.label">
+          <b>{{ item.value }}</b>
+          <small>{{ item.label }}</small>
+        </span>
+      </div>
     </div>
 
     <a-alert

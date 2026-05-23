@@ -707,11 +707,23 @@ onMounted(async () => {
   --ink: #0f172a;
   --muted: #64748b;
   background:
-    radial-gradient(circle at 4% 4%, rgb(20 184 166 / 18%), transparent 32%),
-    radial-gradient(circle at 96% 10%, rgb(245 158 11 / 16%), transparent 28%),
-    linear-gradient(180deg, #f8fafc, #eef6f3);
+    linear-gradient(120deg, rgb(20 184 166 / 8%) 0 1px, transparent 1px 68px),
+    linear-gradient(150deg, #f8fafc 0%, #edf8f4 45%, #fff7ed 100%);
   min-height: calc(100vh - 96px);
   padding: 20px;
+  position: relative;
+}
+
+.ops-chat-page::before {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 6%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 5%) 1px, transparent 1px);
+  background-size: 42px 42px;
+  content: '';
+  inset: 0;
+  mask-image: linear-gradient(to bottom, #000, transparent 70%);
+  pointer-events: none;
+  position: absolute;
 }
 
 .chat-shell {
@@ -721,17 +733,19 @@ onMounted(async () => {
   grid-template-columns: 360px minmax(0, 1fr);
   margin: 0 auto;
   max-width: 1480px;
+  position: relative;
 }
 
 .chat-sidebar,
 .chat-main {
   border: 1px solid rgb(15 118 110 / 14%);
-  border-radius: 30px;
+  border-radius: 22px;
   box-shadow: 0 24px 70px rgb(15 23 42 / 10%);
 }
 
 .chat-sidebar {
-  background: rgb(255 255 255 / 72%);
+  backdrop-filter: blur(18px);
+  background: rgb(255 255 255 / 78%);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -744,23 +758,39 @@ onMounted(async () => {
   top: 20px;
 }
 
+.chat-sidebar > * {
+  flex: 0 0 auto;
+}
+
 .brand-card,
 .status-card,
 .session-card,
 .suggest-card {
-  background: #fff;
-  border-radius: 24px;
+  background: rgb(255 255 255 / 88%);
+  border: 1px solid rgb(15 23 42 / 7%);
+  border-radius: 16px;
+  box-shadow: 0 14px 34px rgb(15 23 42 / 6%);
   padding: 16px;
 }
 
 .brand-card {
   align-items: center;
   background:
-    radial-gradient(circle at 88% 12%, rgb(45 212 191 / 35%), transparent 34%),
+    linear-gradient(120deg, rgb(255 255 255 / 8%) 0 1px, transparent 1px 42px),
     linear-gradient(135deg, #0f172a, #115e59);
   color: #fff;
   display: flex;
   gap: 14px;
+  overflow: hidden;
+  position: relative;
+}
+
+.brand-card::after {
+  background: linear-gradient(90deg, #38bdf8, #14b8a6, #f59e0b);
+  content: '';
+  height: 3px;
+  inset: auto 0 0;
+  position: absolute;
 }
 
 .avatar,
@@ -810,9 +840,13 @@ onMounted(async () => {
 
 .status-row {
   align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgb(15 23 42 / 6%);
+  border-radius: 12px;
   display: flex;
   justify-content: space-between;
   margin-top: 8px;
+  padding: 8px 10px;
 }
 
 .metrics-grid {
@@ -822,8 +856,10 @@ onMounted(async () => {
 }
 
 .metrics-grid div {
-  background: #fff;
-  border-radius: 18px;
+  background: linear-gradient(180deg, #fff, #f8fafc);
+  border: 1px solid rgb(15 23 42 / 7%);
+  border-radius: 14px;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 5%);
   padding: 12px;
 }
 
@@ -845,9 +881,9 @@ onMounted(async () => {
 .suggest-button,
 .session-button,
 .quick-button {
-  background: #f8fafc;
+  background: linear-gradient(180deg, #fff, #f8fafc);
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
+  border-radius: 12px;
   cursor: pointer;
   display: block;
   margin-top: 8px;
@@ -860,8 +896,9 @@ onMounted(async () => {
 .suggest-button:hover,
 .session-button:hover,
 .quick-button:hover {
-  background: #ecfeff;
+  background: #f0fdfa;
   border-color: #2dd4bf;
+  box-shadow: 0 12px 24px rgb(15 23 42 / 8%);
   transform: translateY(-1px);
 }
 
@@ -881,9 +918,11 @@ onMounted(async () => {
 }
 
 .session-button.active {
-  background: linear-gradient(135deg, #ecfeff, #fff7ed);
+  background:
+    linear-gradient(90deg, rgb(15 118 110 / 14%) 0 4px, transparent 4px),
+    linear-gradient(135deg, #ecfeff, #fff7ed);
   border-color: #14b8a6;
-  box-shadow: inset 4px 0 0 #0f766e;
+  box-shadow: 0 12px 28px rgb(15 23 42 / 8%);
 }
 
 .session-button em {
@@ -897,14 +936,16 @@ onMounted(async () => {
 .empty-session {
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
-  border-radius: 16px;
+  border-radius: 12px;
   color: var(--muted);
   font-size: 12px;
   padding: 12px;
 }
 
 .chat-main {
-  background: rgb(255 255 255 / 84%);
+  backdrop-filter: blur(18px);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 90%), rgb(255 255 255 / 76%));
   display: flex;
   flex-direction: column;
   height: calc(100vh - 136px);
@@ -915,7 +956,10 @@ onMounted(async () => {
 
 .chat-header {
   align-items: center;
-  border-bottom: 1px solid #e2e8f0;
+  background:
+    linear-gradient(120deg, rgb(15 118 110 / 7%) 0 1px, transparent 1px 48px),
+    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(248 250 252 / 70%));
+  border-bottom: 1px solid rgb(15 23 42 / 8%);
   display: flex;
   justify-content: space-between;
   padding: 20px 24px;
@@ -931,6 +975,10 @@ onMounted(async () => {
 
 .chat-body {
   flex: 1 1 auto;
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 4%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 3%) 1px, transparent 1px);
+  background-size: 30px 30px;
   min-height: 0;
   overflow-y: auto;
   padding: 24px;
@@ -957,9 +1005,10 @@ onMounted(async () => {
 }
 
 .message-bubble {
-  background: #f8fafc;
+  background: rgb(255 255 255 / 90%);
   border: 1px solid #e2e8f0;
-  border-radius: 20px;
+  border-radius: 16px;
+  box-shadow: 0 14px 34px rgb(15 23 42 / 7%);
   max-width: min(780px, 86%);
   padding: 14px 16px;
 }
@@ -985,7 +1034,8 @@ onMounted(async () => {
 
 .reference-box {
   background: rgb(255 255 255 / 70%);
-  border-radius: 16px;
+  border: 1px solid rgb(15 23 42 / 7%);
+  border-radius: 12px;
   display: grid;
   gap: 8px;
   margin-top: 12px;
@@ -995,7 +1045,7 @@ onMounted(async () => {
 .employee-decision {
   background: linear-gradient(135deg, rgb(240 253 250 / 86%), rgb(255 251 235 / 76%));
   border: 1px solid rgb(20 184 166 / 20%);
-  border-radius: 18px;
+  border-radius: 14px;
   color: #334155;
   margin-top: 12px;
   padding: 12px;
@@ -1046,7 +1096,7 @@ onMounted(async () => {
   align-items: center;
   background: rgb(255 255 255 / 74%);
   border: 1px solid #ccfbf1;
-  border-radius: 12px;
+  border-radius: 10px;
   display: grid;
   gap: 3px;
   grid-template-columns: 64px 120px minmax(0, 1fr);
@@ -1155,8 +1205,9 @@ onMounted(async () => {
 }
 
 .composer {
-  background: #fff;
-  border-top: 1px solid #e2e8f0;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 94%), #fff);
+  border-top: 1px solid rgb(15 23 42 / 8%);
   box-shadow: 0 -18px 48px rgb(15 23 42 / 10%);
   flex: 0 0 auto;
   padding: 16px 20px 18px;
@@ -1191,8 +1242,8 @@ onMounted(async () => {
 
 .composer-input {
   background: #fff;
-  border: 3px solid #0f766e;
-  border-radius: 20px;
+  border: 2px solid #0f766e;
+  border-radius: 14px;
   box-shadow:
     0 0 0 5px rgb(20 184 166 / 13%),
     inset 0 1px 0 rgb(15 23 42 / 5%);
@@ -1227,7 +1278,7 @@ onMounted(async () => {
 .primary-send,
 .secondary-send {
   border: 0;
-  border-radius: 14px;
+  border-radius: 12px;
   cursor: pointer;
   font-weight: 700;
 }
@@ -1258,6 +1309,385 @@ onMounted(async () => {
 .secondary-send:disabled {
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+/* Service-desk cockpit pass. This page should feel like an AI service console,
+   not a generic admin form. */
+.ops-chat-page {
+  --accent: #14b8a6;
+  --accent-strong: #5eead4;
+  --ink: #e5f4f4;
+  --muted: #9fb3c8;
+  background:
+    linear-gradient(120deg, rgb(34 211 238 / 10%) 0 1px, transparent 1px 72px),
+    linear-gradient(155deg, #050b12 0%, #081a24 48%, #17110b 100%);
+  color: var(--ink);
+}
+
+.ops-chat-page::before {
+  background:
+    linear-gradient(90deg, rgb(125 211 252 / 7%) 1px, transparent 1px),
+    linear-gradient(rgb(125 211 252 / 5%) 1px, transparent 1px);
+}
+
+.chat-sidebar,
+.chat-main {
+  border-color: rgb(148 163 184 / 18%);
+  box-shadow:
+    0 26px 82px rgb(0 0 0 / 30%),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+.chat-sidebar {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 82%), rgb(8 20 31 / 78%));
+}
+
+.status-card,
+.session-card,
+.suggest-card,
+.metrics-grid div {
+  background: rgb(15 23 42 / 72%);
+  border-color: rgb(148 163 184 / 16%);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 18%);
+}
+
+.session-card h2,
+.suggest-card h2,
+.chat-header h2,
+.message-meta span,
+.reference-item-head strong {
+  color: #f8fafc;
+}
+
+.status-row,
+.suggest-button,
+.session-button,
+.quick-button,
+.empty-session {
+  background: rgb(8 20 31 / 74%);
+  border-color: rgb(148 163 184 / 16%);
+  color: var(--ink);
+}
+
+.status-row span,
+.suggest-button small,
+.session-button small,
+.quick-button span,
+.session-button em,
+.empty-session,
+.chat-header p,
+.session-card p,
+.suggest-card p,
+.composer-hint span,
+.message-meta small,
+.reference-title,
+.reference-title small,
+.reference-meta,
+.agent-trace small {
+  color: var(--muted);
+}
+
+.suggest-button:hover,
+.session-button:hover,
+.quick-button:hover,
+.session-button.active {
+  background: rgb(8 47 73 / 82%);
+  border-color: rgb(94 234 212 / 54%);
+  box-shadow: 0 16px 34px rgb(0 0 0 / 24%);
+}
+
+.metrics-grid strong,
+.composer-hint strong,
+.input-label,
+.decision-row > span,
+.decision-list > span,
+.agent-trace > span,
+.decision-actions > span,
+.reference-title span {
+  color: var(--accent-strong);
+}
+
+.chat-main {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 88%), rgb(8 20 31 / 80%));
+}
+
+.chat-header {
+  background:
+    linear-gradient(120deg, rgb(45 212 191 / 12%) 0 1px, transparent 1px 52px),
+    linear-gradient(135deg, rgb(15 23 42 / 94%), rgb(8 47 73 / 72));
+  border-bottom-color: rgb(148 163 184 / 16%);
+}
+
+.chat-header .eyebrow {
+  color: #67e8f9;
+}
+
+.chat-body {
+  background:
+    linear-gradient(90deg, rgb(125 211 252 / 6%) 1px, transparent 1px),
+    linear-gradient(rgb(125 211 252 / 4%) 1px, transparent 1px);
+  background-size: 32px 32px;
+  position: relative;
+}
+
+.chat-body::before {
+  background: linear-gradient(90deg, transparent, rgb(20 184 166 / 16%), transparent);
+  content: '';
+  height: 1px;
+  inset: 28px 24px auto;
+  pointer-events: none;
+  position: absolute;
+}
+
+.message-bubble,
+.reference-box,
+.employee-decision,
+.reference-item,
+.agent-trace li {
+  background: rgb(15 23 42 / 74%);
+  border-color: rgb(148 163 184 / 16%);
+  color: var(--ink);
+}
+
+.message-user .message-bubble {
+  background: linear-gradient(135deg, #0f766e, #115e59);
+  border-color: rgb(94 234 212 / 34%);
+}
+
+.message-system .message-bubble {
+  background: rgb(69 26 3 / 62%);
+  border-color: rgb(245 158 11 / 24%);
+}
+
+.employee-decision > div:first-child span,
+.reference-item p {
+  color: var(--muted);
+}
+
+.agent-trace strong,
+.reference-title span {
+  color: #5eead4;
+}
+
+.agent-trace em {
+  color: #fde68a;
+}
+
+.clarify-button,
+.quick-chip {
+  background: rgb(8 47 73 / 72%);
+  border-color: rgb(103 232 249 / 24%);
+  color: #a5f3fc;
+}
+
+.composer {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 92%), rgb(8 20 31 / 96%));
+  border-top-color: rgb(148 163 184 / 16%);
+}
+
+.composer-input {
+  background: rgb(2 6 23 / 70%);
+  border-color: #14b8a6;
+  color: #f8fafc;
+}
+
+.composer-input::placeholder {
+  color: #64748b;
+}
+
+.secondary-send {
+  background: rgb(15 23 42 / 92%);
+  border: 1px solid rgb(148 163 184 / 18%);
+  color: #cbd5e1;
+}
+
+.ops-chat-page :deep(.ant-tag-default) {
+  background: rgb(15 23 42 / 72%);
+  border-color: rgb(148 163 184 / 22%);
+  color: #e5f4f4;
+}
+
+.ops-chat-page :deep(.ant-tag-green) {
+  background: rgb(20 83 45 / 42%);
+  border-color: rgb(74 222 128 / 28%);
+  color: #86efac;
+}
+
+/* The service desk has a custom cockpit look, but it still needs to respect the
+   user's light theme. These overrides come after the cockpit pass so Ant tags
+   and message metadata do not inherit dark-page colors on light backgrounds. */
+:global(html:not(.dark)) .ops-chat-page {
+  --accent: #0f766e;
+  --accent-strong: #0f3f3a;
+  --ink: #0f172a;
+  --muted: #64748b;
+  background:
+    linear-gradient(120deg, rgb(20 184 166 / 8%) 0 1px, transparent 1px 68px),
+    linear-gradient(150deg, #f8fafc 0%, #edf8f4 45%, #fff7ed 100%);
+  color: var(--ink);
+}
+
+:global(html:not(.dark)) .ops-chat-page::before {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 6%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 5%) 1px, transparent 1px);
+}
+
+:global(html:not(.dark)) .chat-sidebar {
+  background: rgb(255 255 255 / 78%);
+}
+
+:global(html:not(.dark)) .status-card,
+:global(html:not(.dark)) .session-card,
+:global(html:not(.dark)) .suggest-card,
+:global(html:not(.dark)) .metrics-grid div {
+  background: rgb(255 255 255 / 88%);
+  border-color: rgb(15 23 42 / 7%);
+  box-shadow: 0 14px 34px rgb(15 23 42 / 6%);
+}
+
+:global(html:not(.dark)) .session-card h2,
+:global(html:not(.dark)) .suggest-card h2,
+:global(html:not(.dark)) .chat-header h2,
+:global(html:not(.dark)) .message-meta span,
+:global(html:not(.dark)) .reference-item-head strong {
+  color: #0f172a;
+}
+
+:global(html:not(.dark)) .status-row,
+:global(html:not(.dark)) .suggest-button,
+:global(html:not(.dark)) .session-button,
+:global(html:not(.dark)) .quick-button,
+:global(html:not(.dark)) .empty-session {
+  background: linear-gradient(180deg, #fff, #f8fafc);
+  border-color: #e2e8f0;
+  color: var(--ink);
+}
+
+:global(html:not(.dark)) .status-row span,
+:global(html:not(.dark)) .suggest-button small,
+:global(html:not(.dark)) .session-button small,
+:global(html:not(.dark)) .quick-button span,
+:global(html:not(.dark)) .session-button em,
+:global(html:not(.dark)) .empty-session,
+:global(html:not(.dark)) .chat-header p,
+:global(html:not(.dark)) .session-card p,
+:global(html:not(.dark)) .suggest-card p,
+:global(html:not(.dark)) .composer-hint span,
+:global(html:not(.dark)) .message-meta small,
+:global(html:not(.dark)) .reference-title,
+:global(html:not(.dark)) .reference-title small,
+:global(html:not(.dark)) .reference-meta,
+:global(html:not(.dark)) .agent-trace small {
+  color: var(--muted);
+}
+
+:global(html:not(.dark)) .metrics-grid strong,
+:global(html:not(.dark)) .composer-hint strong,
+:global(html:not(.dark)) .input-label,
+:global(html:not(.dark)) .decision-row > span,
+:global(html:not(.dark)) .decision-list > span,
+:global(html:not(.dark)) .agent-trace > span,
+:global(html:not(.dark)) .decision-actions > span,
+:global(html:not(.dark)) .reference-title span {
+  color: var(--accent-strong);
+}
+
+:global(html:not(.dark)) .chat-main {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 90%), rgb(255 255 255 / 76%));
+}
+
+:global(html:not(.dark)) .chat-header {
+  background:
+    linear-gradient(120deg, rgb(15 118 110 / 7%) 0 1px, transparent 1px 48px),
+    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(248 250 252 / 70%));
+  border-bottom-color: rgb(15 23 42 / 8%);
+}
+
+:global(html:not(.dark)) .chat-header .eyebrow {
+  color: var(--accent);
+}
+
+:global(html:not(.dark)) .chat-body {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 4%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 3%) 1px, transparent 1px);
+  background-size: 30px 30px;
+}
+
+:global(html:not(.dark)) .message-bubble,
+:global(html:not(.dark)) .reference-box,
+:global(html:not(.dark)) .employee-decision,
+:global(html:not(.dark)) .reference-item,
+:global(html:not(.dark)) .agent-trace li {
+  background: rgb(255 255 255 / 90%);
+  border-color: #e2e8f0;
+  color: var(--ink);
+}
+
+:global(html:not(.dark)) .message-system .message-bubble {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+:global(html:not(.dark)) .employee-decision {
+  background: linear-gradient(135deg, rgb(240 253 250 / 86%), rgb(255 251 235 / 76%));
+  border-color: rgb(20 184 166 / 20%);
+}
+
+:global(html:not(.dark)) .employee-decision > div:first-child span,
+:global(html:not(.dark)) .reference-item p {
+  color: var(--muted);
+}
+
+:global(html:not(.dark)) .agent-trace strong,
+:global(html:not(.dark)) .reference-title span {
+  color: #0f766e;
+}
+
+:global(html:not(.dark)) .agent-trace em {
+  color: #a16207;
+}
+
+:global(html:not(.dark)) .clarify-button,
+:global(html:not(.dark)) .quick-chip {
+  background: #ecfeff;
+  border-color: #bae6fd;
+  color: #0369a1;
+}
+
+:global(html:not(.dark)) .composer {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 94%), #fff);
+  border-top-color: rgb(15 23 42 / 8%);
+}
+
+:global(html:not(.dark)) .composer-input {
+  background: #fff;
+  border-color: #0f766e;
+  color: #0f172a;
+}
+
+:global(html:not(.dark)) .secondary-send {
+  background: #f1f5f9;
+  border-color: transparent;
+  color: #334155;
+}
+
+:global(html:not(.dark)) .ops-chat-page :deep(.ant-tag-default) {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+:global(html:not(.dark)) .ops-chat-page :deep(.ant-tag-green) {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
 }
 
 @media (max-width: 1180px) {

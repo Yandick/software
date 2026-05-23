@@ -310,6 +310,11 @@ onBeforeUnmount(stopAuto);
           <span>闭环进度</span>
           <b>{{ currentStage.done }}/{{ currentStage.total }}</b>
         </div>
+        <div class="signal-grid" aria-label="演示能力状态">
+          <span><b>RAG</b><small>证据命中</small></span>
+          <span><b>Agent</b><small>工具协同</small></span>
+          <span><b>Audit</b><small>全程留痕</small></span>
+        </div>
         <div class="hero-actions" data-testid="demo-actions">
           <AButton data-testid="demo-reset" :loading="loading" size="large" @click="resetSession">重置链路</AButton>
           <AButton
@@ -582,29 +587,28 @@ onBeforeUnmount(stopAuto);
 .demo-page {
   --demo-amber: #f59e0b;
   --demo-blue: #0f766e;
-  --demo-border: rgb(15 23 42 / 10%);
-  --demo-card: rgb(255 255 255 / 90%);
+  --demo-border: rgb(15 23 42 / 9%);
+  --demo-card: rgb(255 255 255 / 86%);
   --demo-ink: #102027;
   --demo-muted: #64748b;
   background:
-    radial-gradient(circle at 8% 2%, rgb(45 212 191 / 34%), transparent 30%),
-    radial-gradient(circle at 88% 0%, rgb(251 191 36 / 28%), transparent 28%),
-    linear-gradient(135deg, #ecfeff 0%, #f8fafc 42%, #fff7ed 100%);
+    linear-gradient(120deg, rgb(20 184 166 / 9%) 0 1px, transparent 1px 68px),
+    linear-gradient(150deg, #f8fafc 0%, #edf9f6 44%, #fff7ed 100%);
   color: var(--demo-ink);
   display: grid;
-  gap: 12px;
+  gap: 14px;
   grid-template-rows: auto auto auto;
   min-height: max(720px, calc(100vh - 88px));
   overflow: auto;
-  padding: 14px;
+  padding: 16px;
   position: relative;
 }
 
 .demo-page::before {
   background-image:
-    linear-gradient(rgb(15 118 110 / 7%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(15 118 110 / 7%) 1px, transparent 1px);
-  background-size: 34px 34px;
+    linear-gradient(rgb(15 23 42 / 6%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(15 23 42 / 6%) 1px, transparent 1px);
+  background-size: 36px 36px;
   content: '';
   inset: 0;
   mask-image: linear-gradient(to bottom, #000, transparent 72%);
@@ -619,18 +623,30 @@ onBeforeUnmount(stopAuto);
   backdrop-filter: blur(22px);
   background: var(--demo-card);
   border: 1px solid var(--demo-border);
-  border-radius: 18px;
-  box-shadow: 0 18px 50px rgb(15 23 42 / 9%);
+  border-radius: 16px;
+  box-shadow: 0 18px 52px rgb(15 23 42 / 8%);
   position: relative;
   z-index: 1;
 }
 
 .hero-card {
   align-items: stretch;
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 82%), rgb(255 255 255 / 66%)),
+    linear-gradient(135deg, rgb(20 184 166 / 14%), rgb(251 191 36 / 14%));
   display: grid;
   gap: 14px;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+  overflow: hidden;
   padding: 14px 16px;
+}
+
+.hero-card::after {
+  background: linear-gradient(90deg, #38bdf8, #14b8a6, #f59e0b, #fb7185);
+  content: '';
+  height: 3px;
+  inset: auto 0 0;
+  position: absolute;
 }
 
 .eyebrow-row {
@@ -680,8 +696,12 @@ onBeforeUnmount(stopAuto);
 }
 
 .hero-console {
-  background: linear-gradient(145deg, #0f172a, #134e4a 64%, #78350f);
+  background:
+    linear-gradient(120deg, rgb(255 255 255 / 8%) 0 1px, transparent 1px 42px),
+    linear-gradient(145deg, #0b1220, #113f3d 64%, #7c2d12);
+  border: 1px solid rgb(255 255 255 / 12%);
   border-radius: 20px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%);
   color: #ecfeff;
   display: grid;
   gap: 8px;
@@ -731,6 +751,40 @@ onBeforeUnmount(stopAuto);
   font-size: 18px;
 }
 
+.signal-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.signal-grid span {
+  background: rgb(255 255 255 / 9%);
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 12px;
+  min-width: 0;
+  padding: 7px 8px;
+}
+
+.signal-grid b,
+.signal-grid small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-grid b {
+  color: #fff;
+  font-size: 12px;
+}
+
+.signal-grid small {
+  color: rgb(204 251 241 / 72%);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
 .hero-actions,
 .step-list,
 .mini-tags,
@@ -755,6 +809,8 @@ onBeforeUnmount(stopAuto);
 }
 
 .progress-card {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 90%), rgb(255 255 255 / 72%));
   padding: 10px 14px;
 }
 
@@ -767,6 +823,7 @@ onBeforeUnmount(stopAuto);
 
 .progress-flow {
   min-width: 0;
+  overflow: hidden;
 }
 
 .progress-head {
@@ -800,23 +857,24 @@ onBeforeUnmount(stopAuto);
 }
 
 .spotlight-card {
-  background: linear-gradient(135deg, #0f172a, #134e4a);
+  background:
+    linear-gradient(120deg, rgb(255 255 255 / 8%) 0 1px, transparent 1px 44px),
+    linear-gradient(135deg, #0f172a, #134e4a);
   border-radius: 18px;
   color: #fff;
   min-height: 108px;
+  isolation: isolate;
   padding: 12px 14px;
   position: relative;
   overflow: hidden;
 }
 
 .spotlight-card::before {
-  background: radial-gradient(circle, rgb(255 255 255 / 22%), transparent 62%);
+  background: linear-gradient(135deg, transparent 0 35%, rgb(255 255 255 / 14%) 35% 52%, transparent 52%);
   content: '';
-  height: 180px;
+  inset: 0;
   position: absolute;
-  right: -70px;
-  top: -80px;
-  width: 180px;
+  z-index: -1;
 }
 
 .spotlight-card span {
@@ -908,10 +966,12 @@ onBeforeUnmount(stopAuto);
 
 .role-desktop {
   background:
-    linear-gradient(135deg, rgb(15 23 42 / 6%), rgb(15 118 110 / 8%)),
+    linear-gradient(120deg, rgb(15 23 42 / 7%) 0 1px, transparent 1px 48px),
+    linear-gradient(135deg, rgb(15 23 42 / 7%), rgb(15 118 110 / 9%)),
     rgb(255 255 255 / 36%);
   border: 1px solid rgb(15 23 42 / 8%);
   border-radius: 22px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 64%);
   display: grid;
   gap: 10px;
   grid-template-rows: auto minmax(0, 1fr);
@@ -930,6 +990,7 @@ onBeforeUnmount(stopAuto);
   background: rgb(255 255 255 / 72%);
   border: 1px solid rgb(15 23 42 / 10%);
   border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%);
   cursor: pointer;
   display: grid;
   gap: 3px 8px;
@@ -1000,6 +1061,8 @@ onBeforeUnmount(stopAuto);
 }
 
 .role-panel {
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(255 255 255 / 76%));
   display: flex;
   flex-direction: column;
   transition:
@@ -1031,9 +1094,12 @@ onBeforeUnmount(stopAuto);
 
 .window-chrome {
   align-items: center;
-  background: linear-gradient(135deg, #0f172a, #1e293b);
+  background:
+    linear-gradient(120deg, rgb(255 255 255 / 8%) 0 1px, transparent 1px 38px),
+    linear-gradient(135deg, #0b1220, #1f2937);
   border: 1px solid rgb(255 255 255 / 10%);
   border-radius: 14px;
+  box-shadow: 0 10px 24px rgb(15 23 42 / 12%);
   color: #e2e8f0;
   display: grid;
   flex: 0 0 auto;
@@ -1111,6 +1177,7 @@ onBeforeUnmount(stopAuto);
   align-items: start;
   border: 1px solid rgb(15 23 42 / 9%);
   border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 80%);
   display: grid;
   flex: 0 0 auto;
   gap: 8px;
@@ -1182,6 +1249,7 @@ onBeforeUnmount(stopAuto);
   background: linear-gradient(180deg, #fff, #f8fafc);
   border: 1px solid #e2e8f0;
   border-radius: 12px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 4%);
   margin-bottom: 8px;
   padding: 8px;
 }
@@ -1234,6 +1302,7 @@ onBeforeUnmount(stopAuto);
   background: rgb(255 255 255 / 86%);
   border: 1px solid #e2e8f0;
   border-radius: 12px;
+  box-shadow: 0 8px 22px rgb(15 23 42 / 4%);
   padding: 8px;
 }
 
@@ -1407,6 +1476,235 @@ onBeforeUnmount(stopAuto);
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+/* Command-center visual pass. The demo is the recording surface, so it gets a
+   stronger cockpit treatment than the routine CRUD pages. */
+.demo-page {
+  --demo-border: rgb(148 163 184 / 18%);
+  --demo-card: rgb(8 20 31 / 82%);
+  --demo-ink: #eaf6f5;
+  --demo-muted: #9fb3c8;
+  background:
+    linear-gradient(115deg, rgb(34 211 238 / 12%) 0 1px, transparent 1px 86px),
+    linear-gradient(155deg, #050b12 0%, #071923 46%, #1a1110 100%);
+}
+
+.demo-page::before {
+  background-image:
+    linear-gradient(rgb(125 211 252 / 8%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(125 211 252 / 7%) 1px, transparent 1px);
+}
+
+.hero-card,
+.progress-card,
+.role-panel,
+.timeline-card {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 86%), rgb(8 20 31 / 82%));
+  border-color: rgb(148 163 184 / 18%);
+  box-shadow:
+    0 24px 80px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 8%);
+}
+
+.hero-card {
+  background:
+    linear-gradient(120deg, rgb(45 212 191 / 14%) 0 1px, transparent 1px 54px),
+    linear-gradient(135deg, rgb(15 23 42 / 92%), rgb(6 78 59 / 72) 58%, rgb(69 26 3 / 78));
+}
+
+.hero-card h1,
+.progress-head strong,
+.question-card strong,
+.issue-card b,
+.knowledge-card b,
+.draft-box b,
+.assist-box b,
+.solution-box b,
+.window-status strong,
+.dock-item strong {
+  color: #f8fafc;
+}
+
+.hero-copy > p,
+.progress-number,
+.chat-item p,
+.trace-list p,
+.audit-list p,
+.timeline-item p,
+.assist-box p,
+.solution-box p,
+.draft-box p {
+  color: var(--demo-muted);
+}
+
+.progress-card {
+  background:
+    linear-gradient(90deg, rgb(45 212 191 / 10%) 0 1px, transparent 1px 56px),
+    rgb(8 20 31 / 86%);
+}
+
+.section-kicker {
+  color: #67e8f9;
+}
+
+.progress-number b {
+  color: #5eead4;
+}
+
+.step-pill {
+  background: rgb(15 23 42 / 78%);
+  border-color: rgb(148 163 184 / 14%);
+  color: #a8bdd1;
+}
+
+.step-pill.done {
+  background: rgb(20 184 166 / 16%);
+  color: #99f6e4;
+}
+
+.step-pill.active {
+  background: rgb(245 158 11 / 17%);
+  box-shadow: 0 0 0 3px rgb(245 158 11 / 10%);
+  color: #fde68a;
+}
+
+.demo-stage {
+  isolation: isolate;
+}
+
+.demo-stage::before {
+  background: linear-gradient(90deg, transparent, rgb(34 211 238 / 24%), rgb(245 158 11 / 18%), transparent);
+  content: '';
+  height: 1px;
+  inset: 38px 390px auto 26px;
+  opacity: 0.88;
+  position: absolute;
+  z-index: 0;
+}
+
+.role-desktop {
+  background:
+    linear-gradient(120deg, rgb(125 211 252 / 8%) 0 1px, transparent 1px 58px),
+    linear-gradient(145deg, rgb(2 8 23 / 94%), rgb(8 47 73 / 52));
+  border-color: rgb(125 211 252 / 18%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 9%),
+    0 26px 80px rgb(0 0 0 / 26%);
+  overflow: hidden;
+  position: relative;
+}
+
+.role-desktop::before {
+  animation: command-scan 7s linear infinite;
+  background: linear-gradient(90deg, transparent, rgb(103 232 249 / 13%), transparent);
+  content: '';
+  height: 100%;
+  left: -28%;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: skewX(-18deg);
+  width: 28%;
+  z-index: 0;
+}
+
+.desktop-dock,
+.grid-panels {
+  position: relative;
+  z-index: 1;
+}
+
+.dock-item {
+  background: rgb(15 23 42 / 78%);
+  border-color: rgb(148 163 184 / 18%);
+}
+
+.dock-item small {
+  color: #94a3b8;
+}
+
+.dock-item:hover,
+.dock-item.active {
+  background: rgb(8 47 73 / 86%);
+  box-shadow:
+    0 14px 34px rgb(0 0 0 / 22%),
+    0 0 0 1px rgb(103 232 249 / 18%);
+}
+
+.role-panel {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 90%), rgb(8 20 31 / 86%));
+}
+
+.role-panel.focused {
+  border-color: rgb(94 234 212 / 48%);
+  box-shadow:
+    0 24px 70px rgb(0 0 0 / 34%),
+    0 0 0 3px rgb(45 212 191 / 13%);
+}
+
+.window-status.role-sky,
+.window-status.role-cyan,
+.window-status.role-emerald,
+.window-status.role-amber {
+  background: rgb(15 23 42 / 72%);
+  border-color: rgb(148 163 184 / 16%);
+}
+
+.question-card,
+.draft-box,
+.issue-card,
+.assist-box,
+.solution-box,
+.knowledge-card,
+.empty-card,
+.chat-item,
+.trace-list li,
+.audit-list li,
+.timeline-item,
+.stats-grid div {
+  background: rgb(15 23 42 / 66%);
+  border-color: rgb(148 163 184 / 16%);
+}
+
+.empty-card,
+.question-card span,
+.stats-grid span {
+  color: #94a3b8;
+}
+
+.trace-list strong {
+  color: #5eead4;
+}
+
+.trace-list span {
+  color: #fde68a;
+}
+
+.timeline-card {
+  background:
+    linear-gradient(180deg, rgb(15 23 42 / 90%), rgb(8 20 31 / 82%));
+}
+
+.panel-head span,
+.detail-link {
+  color: #67e8f9;
+}
+
+.event-modal {
+  background: #fff;
+}
+
+@keyframes command-scan {
+  from {
+    left: -30%;
+  }
+
+  to {
+    left: 112%;
   }
 }
 

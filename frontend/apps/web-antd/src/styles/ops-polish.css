@@ -1,0 +1,549 @@
+.issue-page,
+.account-page,
+.knowledge-page,
+.audit-page {
+  --ops-accent: #0f766e;
+  --ops-amber: #d97706;
+  --ops-border: rgb(15 23 42 / 9%);
+  --ops-card: rgb(255 255 255 / 86%);
+  --ops-ink: #0f172a;
+  --ops-muted: #64748b;
+  background:
+    linear-gradient(120deg, rgb(15 118 110 / 8%) 0 1px, transparent 1px 70px),
+    linear-gradient(150deg, #f8fafc 0%, #eff8f5 46%, #fff7ed 100%);
+  color: var(--ops-ink);
+  min-height: calc(100vh - 96px);
+  position: relative;
+}
+
+.issue-page::before,
+.account-page::before,
+.knowledge-page::before,
+.audit-page::before {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 7%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 6%) 1px, transparent 1px);
+  background-size: 44px 44px;
+  content: '';
+  inset: 0;
+  mask-image: linear-gradient(to bottom, #000, transparent 72%);
+  pointer-events: none;
+  position: absolute;
+}
+
+.issue-page > *,
+.account-page > *,
+.knowledge-page > *,
+.audit-page > * {
+  position: relative;
+}
+
+.issue-page > .mb-5.rounded-3xl,
+.account-page > .mb-5.rounded-3xl,
+.knowledge-page > .mb-5.rounded-3xl,
+.audit-hero {
+  align-items: end;
+  background:
+    linear-gradient(120deg, rgb(255 255 255 / 10%) 0 1px, transparent 1px 56px),
+    linear-gradient(135deg, #0b1220 0%, #103a3a 58%, #7c2d12 100%) !important;
+  border: 1px solid rgb(255 255 255 / 14%);
+  box-shadow: 0 22px 70px rgb(15 23 42 / 18%);
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.38fr);
+  overflow: hidden;
+  position: relative;
+}
+
+.issue-page > .mb-5.rounded-3xl::after,
+.account-page > .mb-5.rounded-3xl::after,
+.knowledge-page > .mb-5.rounded-3xl::after,
+.audit-hero::after {
+  background: linear-gradient(90deg, #38bdf8, #14b8a6, #f59e0b, #fb7185);
+  content: '';
+  height: 3px;
+  inset: auto 0 0;
+  position: absolute;
+}
+
+.issue-page > .mb-5.rounded-3xl > div:first-child,
+.account-page > .mb-5.rounded-3xl > div:first-child,
+.knowledge-page > .mb-5.rounded-3xl > div:first-child {
+  grid-column: 1;
+}
+
+.issue-page > .mb-5.rounded-3xl > h1,
+.issue-page > .mb-5.rounded-3xl > p,
+.account-page > .mb-5.rounded-3xl > h1,
+.account-page > .mb-5.rounded-3xl > p,
+.knowledge-page > .mb-5.rounded-3xl > h1,
+.knowledge-page > .mb-5.rounded-3xl > p {
+  grid-column: 1;
+}
+
+.ops-hero-metrics {
+  background: rgb(255 255 255 / 10%);
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 18px;
+  display: grid;
+  gap: 8px;
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 10px;
+}
+
+.ops-hero-metrics span {
+  background: rgb(15 23 42 / 34%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 14px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.ops-hero-metrics b,
+.ops-hero-metrics small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-hero-metrics b {
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.ops-hero-metrics small {
+  color: rgb(204 251 241 / 76%);
+  font-size: 12px;
+  margin-top: 7px;
+}
+
+.issue-page .ant-card,
+.account-page .ant-card,
+.knowledge-page .ant-card,
+.audit-page .ant-card {
+  background: var(--ops-card);
+  border: 1px solid var(--ops-border);
+  box-shadow: 0 18px 52px rgb(15 23 42 / 8%);
+  overflow: hidden;
+}
+
+.issue-page .ant-card-head,
+.account-page .ant-card-head,
+.knowledge-page .ant-card-head,
+.audit-page .ant-card-head {
+  background: linear-gradient(180deg, rgb(255 255 255 / 82%), rgb(248 250 252 / 72%));
+  border-bottom-color: rgb(15 23 42 / 8%);
+}
+
+.issue-page .ant-card-head-title,
+.account-page .ant-card-head-title,
+.knowledge-page .ant-card-head-title,
+.audit-page .ant-card-head-title {
+  color: var(--ops-ink);
+  font-weight: 850;
+}
+
+.issue-page .ant-table,
+.account-page .ant-table,
+.knowledge-page .ant-table,
+.audit-page .ant-table {
+  background: transparent;
+}
+
+.issue-page .ant-table-thead > tr > th,
+.account-page .ant-table-thead > tr > th,
+.knowledge-page .ant-table-thead > tr > th,
+.audit-page .ant-table-thead > tr > th {
+  background: #f1f5f9;
+  color: #334155;
+  font-weight: 850;
+}
+
+.issue-page .ant-table-tbody > tr > td,
+.account-page .ant-table-tbody > tr > td,
+.knowledge-page .ant-table-tbody > tr > td,
+.audit-page .ant-table-tbody > tr > td {
+  border-bottom-color: rgb(15 23 42 / 7%);
+}
+
+.issue-page .ant-table-tbody > tr:hover > td,
+.account-page .ant-table-tbody > tr:hover > td,
+.knowledge-page .ant-table-tbody > tr:hover > td,
+.audit-page .ant-table-tbody > tr:hover > td {
+  background: rgb(240 253 250 / 72%);
+}
+
+.issue-page .issue-item,
+.issue-page .assist-box,
+.issue-page .knowledge-ref,
+.audit-page .metric-card,
+.audit-page .ratio-box {
+  backdrop-filter: blur(16px);
+  border-color: rgb(15 23 42 / 8%) !important;
+  box-shadow: 0 14px 34px rgb(15 23 42 / 6%);
+}
+
+.issue-page .issue-item {
+  background:
+    linear-gradient(90deg, rgb(20 184 166 / 16%) 0 4px, transparent 4px),
+    rgb(255 255 255 / 82%);
+}
+
+.issue-page .issue-item:hover,
+.audit-page .metric-card:hover,
+.audit-page .ratio-box:hover {
+  transform: translateY(-1px);
+}
+
+.audit-page .metric-card,
+.audit-page .ratio-box {
+  transition:
+    box-shadow 0.18s ease,
+    transform 0.18s ease;
+}
+
+.account-page .ant-input,
+.account-page .ant-select-selector,
+.knowledge-page .ant-input,
+.knowledge-page .ant-select-selector,
+.issue-page .ant-input,
+.issue-page .ant-select-selector,
+.audit-page .ant-input,
+.audit-page .ant-select-selector {
+  border-color: rgb(15 23 42 / 13%) !important;
+}
+
+.account-page .ant-input:focus,
+.account-page .ant-select-focused .ant-select-selector,
+.knowledge-page .ant-input:focus,
+.knowledge-page .ant-select-focused .ant-select-selector,
+.issue-page .ant-input:focus,
+.issue-page .ant-select-focused .ant-select-selector,
+.audit-page .ant-input:focus,
+.audit-page .ant-select-focused .ant-select-selector {
+  border-color: #14b8a6 !important;
+  box-shadow: 0 0 0 4px rgb(20 184 166 / 12%) !important;
+}
+
+@media (max-width: 720px) {
+  .issue-page,
+  .account-page,
+  .knowledge-page,
+  .audit-page {
+    padding: 12px !important;
+  }
+}
+
+.dark .issue-page,
+.dark .account-page,
+.dark .knowledge-page,
+.dark .audit-page {
+  --ops-accent: #14b8a6;
+  --ops-amber: #f59e0b;
+  --ops-border: rgb(148 163 184 / 18%);
+  --ops-card: rgb(15 23 42 / 78%);
+  --ops-ink: #e5f4f4;
+  --ops-muted: #9fb3c8;
+  background:
+    linear-gradient(120deg, rgb(34 211 238 / 9%) 0 1px, transparent 1px 72px),
+    linear-gradient(155deg, #050b12 0%, #081a24 48%, #17110b 100%) !important;
+  color: var(--ops-ink) !important;
+}
+
+.dark .issue-page::before,
+.dark .account-page::before,
+.dark .knowledge-page::before,
+.dark .audit-page::before {
+  background:
+    linear-gradient(90deg, rgb(125 211 252 / 7%) 1px, transparent 1px),
+    linear-gradient(rgb(125 211 252 / 5%) 1px, transparent 1px);
+}
+
+.dark .issue-page .ant-card,
+.dark .account-page .ant-card,
+.dark .knowledge-page .ant-card,
+.dark .audit-page .ant-card {
+  background: var(--ops-card) !important;
+  border-color: var(--ops-border) !important;
+  color: var(--ops-ink) !important;
+  box-shadow:
+    0 24px 70px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 7%);
+}
+
+.dark .issue-page .ant-card-head,
+.dark .account-page .ant-card-head,
+.dark .knowledge-page .ant-card-head,
+.dark .audit-page .ant-card-head,
+.dark .issue-page .ant-table-thead > tr > th,
+.dark .account-page .ant-table-thead > tr > th,
+.dark .knowledge-page .ant-table-thead > tr > th,
+.dark .audit-page .ant-table-thead > tr > th {
+  background: rgb(8 20 31 / 88%) !important;
+  border-color: rgb(148 163 184 / 15%) !important;
+  color: #f8fafc !important;
+}
+
+.dark .issue-page .ant-card-head-title,
+.dark .account-page .ant-card-head-title,
+.dark .knowledge-page .ant-card-head-title,
+.dark .audit-page .ant-card-head-title,
+.dark .issue-page h1,
+.dark .account-page h1,
+.dark .knowledge-page h1,
+.dark .audit-page h1,
+.dark .issue-page strong,
+.dark .account-page strong,
+.dark .knowledge-page strong,
+.dark .audit-page strong {
+  color: #f8fafc;
+}
+
+.dark .issue-page p,
+.dark .account-page p,
+.dark .knowledge-page p,
+.dark .audit-page p,
+.dark .issue-page .text-slate-500,
+.dark .issue-page .text-slate-600,
+.dark .issue-page .text-slate-700,
+.dark .account-page .text-slate-500,
+.dark .account-page .text-slate-600,
+.dark .account-page .text-slate-700,
+.dark .knowledge-page .text-slate-500,
+.dark .knowledge-page .text-slate-600,
+.dark .knowledge-page .text-slate-700,
+.dark .audit-page .text-slate-500,
+.dark .audit-page .text-slate-600,
+.dark .audit-page .text-slate-700 {
+  color: var(--ops-muted) !important;
+}
+
+.dark .issue-page .issue-item,
+.dark .issue-page .assist-box,
+.dark .issue-page .knowledge-ref,
+.dark .audit-page .metric-card,
+.dark .audit-page .ratio-box,
+.dark .audit-page .summary-row {
+  background: rgb(15 23 42 / 72%) !important;
+  border-color: rgb(148 163 184 / 16%) !important;
+  color: var(--ops-ink) !important;
+}
+
+.dark .issue-page aside.rounded-2xl,
+.dark .issue-page .rounded-xl,
+.dark .issue-page .bg-slate-50,
+.dark .issue-page .bg-amber-50,
+.dark .knowledge-page .bg-slate-50,
+.dark .account-page .bg-slate-50,
+.dark .audit-page .bg-slate-50 {
+  background: rgb(8 20 31 / 78%) !important;
+  color: var(--ops-ink) !important;
+}
+
+.dark .issue-page .ant-input,
+.dark .issue-page .ant-input-affix-wrapper,
+.dark .issue-page .ant-select-selector,
+.dark .issue-page .ant-input-number,
+.dark .account-page .ant-input,
+.dark .account-page .ant-input-affix-wrapper,
+.dark .account-page .ant-select-selector,
+.dark .account-page .ant-input-number,
+.dark .knowledge-page .ant-input,
+.dark .knowledge-page .ant-input-affix-wrapper,
+.dark .knowledge-page .ant-select-selector,
+.dark .knowledge-page .ant-input-number,
+.dark .audit-page .ant-input,
+.dark .audit-page .ant-input-affix-wrapper,
+.dark .audit-page .ant-select-selector,
+.dark .audit-page .ant-input-number {
+  background: rgb(2 6 23 / 70%) !important;
+  border-color: rgb(148 163 184 / 22%) !important;
+  color: #f8fafc !important;
+}
+
+.dark .issue-page .ant-input::placeholder,
+.dark .account-page .ant-input::placeholder,
+.dark .knowledge-page .ant-input::placeholder,
+.dark .audit-page .ant-input::placeholder {
+  color: #64748b !important;
+}
+
+.dark .issue-page .ant-table-tbody > tr > td,
+.dark .account-page .ant-table-tbody > tr > td,
+.dark .knowledge-page .ant-table-tbody > tr > td,
+.dark .audit-page .ant-table-tbody > tr > td {
+  background: rgb(15 23 42 / 58%) !important;
+  border-color: rgb(148 163 184 / 12%) !important;
+  color: var(--ops-ink) !important;
+}
+
+.dark .issue-page .ant-table-tbody > tr:hover > td,
+.dark .account-page .ant-table-tbody > tr:hover > td,
+.dark .knowledge-page .ant-table-tbody > tr:hover > td,
+.dark .audit-page .ant-table-tbody > tr:hover > td {
+  background: rgb(8 47 73 / 72%) !important;
+}
+
+.dark .text-primary,
+.dark [class~='text-primary'],
+.dark .breadcrumb-item-link,
+.dark .vben-breadcrumb a,
+.dark .vben-breadcrumb a .flex-center,
+.dark .vben-breadcrumb a svg,
+.dark .tabs-chrome__item-main,
+.dark .tabs-chrome__item-main svg,
+.dark .tabs-chrome__item-main span {
+  color: #7dd3fc !important;
+}
+
+.dark .tabs-chrome__item,
+.dark .tabs-chrome__item .relative {
+  min-width: max-content;
+}
+
+.dark .ant-btn-dangerous:not(.ant-btn-primary) {
+  border-color: rgb(251 113 133 / 42%) !important;
+  color: #fb7185 !important;
+}
+
+.dark .ant-btn-dangerous:not(.ant-btn-primary):hover {
+  border-color: rgb(253 164 175 / 70%) !important;
+  color: #fda4af !important;
+}
+
+.dark .ant-tag-geekblue,
+.dark .ant-tag-processing {
+  background: rgb(30 41 59 / 74%) !important;
+  border-color: rgb(147 197 253 / 32%) !important;
+  color: #93c5fd !important;
+}
+
+.dark .audit-page .ratio-box span,
+.dark .audit-page .ratio-box small {
+  color: #9fb3c8 !important;
+}
+
+html:not(.dark) .ops-chat-page {
+  --accent: #0f766e;
+  --accent-strong: #0f3f3a;
+  --ink: #0f172a;
+  --muted: #64748b;
+  background:
+    linear-gradient(120deg, rgb(20 184 166 / 8%) 0 1px, transparent 1px 68px),
+    linear-gradient(150deg, #f8fafc 0%, #edf8f4 45%, #fff7ed 100%) !important;
+  color: var(--ink) !important;
+}
+
+html:not(.dark) .ops-chat-page::before {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 6%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 5%) 1px, transparent 1px) !important;
+}
+
+html:not(.dark) .ops-chat-page .chat-sidebar,
+html:not(.dark) .ops-chat-page .chat-main,
+html:not(.dark) .ops-chat-page .status-card,
+html:not(.dark) .ops-chat-page .session-card,
+html:not(.dark) .ops-chat-page .suggest-card,
+html:not(.dark) .ops-chat-page .metrics-grid div {
+  background: rgb(255 255 255 / 84%) !important;
+  border-color: rgb(15 23 42 / 9%) !important;
+  color: var(--ink) !important;
+}
+
+html:not(.dark) .ops-chat-page .chat-header {
+  background:
+    linear-gradient(120deg, rgb(15 118 110 / 7%) 0 1px, transparent 1px 48px),
+    linear-gradient(180deg, rgb(255 255 255 / 92%), rgb(248 250 252 / 70%)) !important;
+  border-bottom-color: rgb(15 23 42 / 8%) !important;
+}
+
+html:not(.dark) .ops-chat-page .chat-body {
+  background:
+    linear-gradient(90deg, rgb(15 23 42 / 4%) 1px, transparent 1px),
+    linear-gradient(rgb(15 23 42 / 3%) 1px, transparent 1px) !important;
+  background-size: 30px 30px !important;
+}
+
+html:not(.dark) .ops-chat-page .status-row,
+html:not(.dark) .ops-chat-page .suggest-button,
+html:not(.dark) .ops-chat-page .session-button,
+html:not(.dark) .ops-chat-page .quick-button,
+html:not(.dark) .ops-chat-page .empty-session,
+html:not(.dark) .ops-chat-page .message-bubble,
+html:not(.dark) .ops-chat-page .reference-box,
+html:not(.dark) .ops-chat-page .employee-decision,
+html:not(.dark) .ops-chat-page .reference-item,
+html:not(.dark) .ops-chat-page .agent-trace li {
+  background: rgb(255 255 255 / 90%) !important;
+  border-color: #e2e8f0 !important;
+  color: var(--ink) !important;
+}
+
+html:not(.dark) .ops-chat-page .composer {
+  background: linear-gradient(180deg, rgb(255 255 255 / 94%), #fff) !important;
+  border-top-color: rgb(15 23 42 / 8%) !important;
+}
+
+html:not(.dark) .ops-chat-page .composer-input {
+  background: #fff !important;
+  border-color: #0f766e !important;
+  color: #0f172a !important;
+}
+
+html:not(.dark) .ops-chat-page .session-card h2,
+html:not(.dark) .ops-chat-page .suggest-card h2,
+html:not(.dark) .ops-chat-page .chat-header h2,
+html:not(.dark) .ops-chat-page .message-meta span,
+html:not(.dark) .ops-chat-page .reference-item-head strong {
+  color: #0f172a !important;
+}
+
+html:not(.dark) .ops-chat-page .status-row span,
+html:not(.dark) .ops-chat-page .suggest-button small,
+html:not(.dark) .ops-chat-page .session-button small,
+html:not(.dark) .ops-chat-page .quick-button span,
+html:not(.dark) .ops-chat-page .session-button em,
+html:not(.dark) .ops-chat-page .empty-session,
+html:not(.dark) .ops-chat-page .chat-header p,
+html:not(.dark) .ops-chat-page .session-card p,
+html:not(.dark) .ops-chat-page .suggest-card p,
+html:not(.dark) .ops-chat-page .composer-hint span,
+html:not(.dark) .ops-chat-page .message-meta small,
+html:not(.dark) .ops-chat-page .reference-title,
+html:not(.dark) .ops-chat-page .reference-title small,
+html:not(.dark) .ops-chat-page .reference-meta,
+html:not(.dark) .ops-chat-page .agent-trace small {
+  color: #64748b !important;
+}
+
+html:not(.dark) .ops-chat-page .ant-tag-default {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+html:not(.dark) .ops-chat-page .ant-tag-green {
+  background: #f0fdf4 !important;
+  border-color: #bbf7d0 !important;
+  color: #166534 !important;
+}
+
+@media (max-width: 1180px) {
+  .issue-page > .mb-5.rounded-3xl,
+  .account-page > .mb-5.rounded-3xl,
+  .knowledge-page > .mb-5.rounded-3xl,
+  .audit-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .ops-hero-metrics {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}

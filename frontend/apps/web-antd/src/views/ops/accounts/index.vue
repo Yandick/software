@@ -44,6 +44,11 @@ const canExport = computed(() => ['admin', 'auditor'].includes(currentRole.value
 const expiringAccounts = computed(() =>
   rows.value.filter((item) => ['expired', 'expiring', 'invalid'].includes(item.expiry_status)),
 );
+const heroMetrics = computed(() => [
+  { label: '账号总数', value: rows.value.length },
+  { label: '启用账号', value: rows.value.filter((item) => item.status === 'active').length },
+  { label: '待审批', value: approvals.value.filter((item) => item.status === 'pending').length },
+]);
 
 const columns = [
   { title: '账号名', dataIndex: 'account_name' },
@@ -298,6 +303,12 @@ onMounted(load);
       <p class="mt-3 max-w-3xl text-white/70">
         账号新增由管理员执行；冻结、解冻和修改属于高风险操作，必须先提交审批，审批通过后才会真正生效。
       </p>
+      <div class="ops-hero-metrics">
+        <span v-for="item in heroMetrics" :key="item.label">
+          <b>{{ item.value }}</b>
+          <small>{{ item.label }}</small>
+        </span>
+      </div>
     </div>
 
     <a-alert

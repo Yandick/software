@@ -1881,6 +1881,136 @@ h2 {
   margin-left: 10px;
 }
 
+:global(.dark) .portal-page {
+  --accent: #14b8a6;
+  --accent-soft: rgb(20 184 166 / 18%);
+  --amber: #f59e0b;
+  --border: rgb(148 163 184 / 18%);
+  --danger: #fb7185;
+  --ink: #e5f4f4;
+  --muted: #9fb3c8;
+  --panel: rgb(15 23 42 / 82%);
+  --surface: #050b12;
+  background:
+    linear-gradient(120deg, rgb(34 211 238 / 9%) 0 1px, transparent 1px 72px),
+    linear-gradient(155deg, #050b12 0%, #081a24 48%, #17110b 100%);
+}
+
+:global(.dark) .portal-topbar,
+:global(.dark) .tool-panel,
+:global(.dark) .conversation-panel,
+:global(.dark) .issues-workspace,
+:global(.dark) .stat-tile,
+:global(.dark) .model-tile,
+:global(.dark) .issue-card,
+:global(.dark) .issue-row,
+:global(.dark) .progress-panel {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+:global(.dark) .portal-nav,
+:global(.dark) .user-chip,
+:global(.dark) .text-button,
+:global(.dark) .icon-button,
+:global(.dark) .outline-button,
+:global(.dark) .ghost-button,
+:global(.dark) .small-button,
+:global(.dark) .filter-button,
+:global(.dark) .service-tile,
+:global(.dark) .history-row,
+:global(.dark) .message-bubble,
+:global(.dark) .decision-box,
+:global(.dark) .reference-list,
+:global(.dark) .reference-item,
+:global(.dark) .composer,
+:global(.dark) .issue-filter,
+:global(.dark) .solution-box,
+:global(.dark) .event-list div {
+  background: rgb(8 20 31 / 76%);
+  border-color: var(--border);
+  color: var(--ink);
+}
+
+:global(.dark) .nav-button,
+:global(.dark) .filter-button {
+  color: var(--muted);
+}
+
+:global(.dark) .nav-button.active,
+:global(.dark) .filter-button.active,
+:global(.dark) .history-row.active {
+  background: rgb(8 47 73 / 82%);
+  color: #99f6e4;
+}
+
+:global(.dark) .brand-block small,
+:global(.dark) .user-chip small,
+:global(.dark) .stat-tile span,
+:global(.dark) .model-tile span,
+:global(.dark) .service-tile small,
+:global(.dark) .history-row span,
+:global(.dark) .history-row small,
+:global(.dark) .chat-titlebar p,
+:global(.dark) .workspace-heading p,
+:global(.dark) .message-meta small,
+:global(.dark) .reference-title small,
+:global(.dark) .reference-item p,
+:global(.dark) .issue-card p,
+:global(.dark) .issue-main > p,
+:global(.dark) .issue-meta,
+:global(.dark) .issue-grid,
+:global(.dark) .progress-track,
+:global(.dark) .event-list small,
+:global(.dark) .rating-text {
+  color: var(--muted);
+}
+
+:global(.dark) .event-list strong,
+:global(.dark) .issue-title strong,
+:global(.dark) .reference-item strong {
+  color: #f8fafc;
+}
+
+:global(.dark) .message-user .message-bubble {
+  background: linear-gradient(135deg, #0f766e, #115e59);
+  border-color: rgb(94 234 212 / 34%);
+  color: #fff;
+}
+
+:global(.dark) .message-system .message-bubble {
+  background: rgb(69 26 3 / 64%);
+  border-color: rgb(245 158 11 / 26%);
+}
+
+:global(.dark) .progress-track span {
+  background: rgb(15 23 42 / 78%);
+  color: var(--muted);
+}
+
+:global(.dark) .progress-track span.active {
+  background: rgb(20 184 166 / 18%);
+  color: #99f6e4;
+}
+
+:global(.dark) .composer-input {
+  background: rgb(2 6 23 / 72%);
+  border-color: #14b8a6;
+  color: #f8fafc;
+}
+
+:global(.dark) .composer-input::placeholder {
+  color: #64748b;
+}
+
+:global(.dark) .suggestion-chip,
+:global(.dark) .clarify-list button {
+  background: rgb(8 47 73 / 72%);
+  border-color: rgb(103 232 249 / 24%);
+  color: #a5f3fc;
+}
+
 @media (max-width: 1320px) {
   .portal-grid {
     grid-template-columns: 280px minmax(0, 1fr);
