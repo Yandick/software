@@ -7,14 +7,17 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ..database import audit, connect, get_user_by_username, issue_event, rows_to_dicts, utc_now
+from ..database import audit, connect, get_user_by_username, issue_event, rows_to_dicts, utc_now, write_audit
 from ..deps import ensure_row_exists
+from ..schemas import AccountApprovalDecision
+from .accounts_service import create_account_approval_record, decide_account_approval
 from .agent_service import agent_service
 from .issues_service import build_issue_assist
 from .knowledge_service import ensure_knowledge_publishable, redact_sensitive_value
 from .llm_service import llm_service
 from .qa_service import (
     build_employee_decision,
+    build_controlled_operation_answer,
     build_issue_draft,
     build_issue_draft_by_rules,
     rag_service,
@@ -23,6 +26,8 @@ from .qa_service import (
 )
 
 DEMO_QUESTION = "VPN 无法连接，提示证书过期，影响远程办公，电话 13800138000"
+ACCOUNT_QUESTION_TEMPLATE = "帮我解冻运维账号 {account_name}，今晚远程值班需要登录堡垒机。"
+FALLBACK_QUESTION = "今天食堂午餐是什么？"
 DEMO_STEPS = [
     "user_ask",
     "agent_review",
@@ -35,6 +40,10 @@ DEMO_STEPS = [
     "visit_and_feedback",
     "knowledge_review",
     "publish_knowledge",
+    "account_question",
+    "account_request",
+    "account_approve",
+    "fallback_question",
     "audit_summary",
 ]
 DEMO_SESSIONS: dict[str, dict[str, Any]] = {}
@@ -44,13 +53,42 @@ def demo_requester_user(fallback: dict[str, Any]) -> dict[str, Any]:
     return get_user_by_username("user") or fallback
 
 
+def demo_ops_user(fallback: dict[str, Any]) -> dict[str, Any]:
+    return get_user_by_username("ops") or {"id": None, "real_name": "演示运维", "role": "ops"}
+
+
 def create_demo_state() -> dict[str, Any]:
     session_id = uuid.uuid4().hex[:8]
     prefix = f"[DEMO-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{session_id}]"
+    account_name = f"demo_alice_{session_id}"
+    account_question = ACCOUNT_QUESTION_TEMPLATE.format(account_name=account_name)
     return {
         "id": session_id,
+        "account_name": account_name,
+        "account_question": account_question,
+        "fallback_question": FALLBACK_QUESTION,
         "prefix": prefix,
         "question": DEMO_QUESTION,
+        "scripted_questions": [
+            {
+                "key": "vpn",
+                "label": "普通故障",
+                "question": DEMO_QUESTION,
+                "result": "RAG 引用 + 转人工闭环",
+            },
+            {
+                "key": "account",
+                "label": "受控账号操作",
+                "question": account_question,
+                "result": "高风险识别 + 审批流",
+            },
+            {
+                "key": "fallback",
+                "label": "知识边界",
+                "question": FALLBACK_QUESTION,
+                "result": "无知识依据时拒绝编造",
+            },
+        ],
         "status": "ready",
         "step_index": 0,
         "steps": DEMO_STEPS,
@@ -58,11 +96,12 @@ def create_demo_state() -> dict[str, Any]:
             {
                 "role": "system",
                 "title": "演示会话已创建",
-                "detail": "准备按 VPN 证书过期剧本演示自助问答、转人工、处理回访、知识沉淀和审计闭环。",
+                "detail": "准备按预置问题队列演示 VPN 闭环、账号受控审批和审计追踪。",
                 "status": "done",
                 "created_at": utc_now(),
             }
         ],
+        "account_window": {"account": {}, "approval": {}, "question": account_question, "answer": ""},
         "user_window": {"messages": []},
         "agent_window": {"trace": [], "draft": {}, "answer": "", "decision": {}},
         "ops_window": {"issue": {}, "assist": {}, "solution": ""},
@@ -129,6 +168,14 @@ def run_demo_step(session_id: str, user: dict[str, Any]) -> dict[str, Any]:
             run_demo_knowledge_review(state)
         elif step == "publish_knowledge":
             run_demo_publish_knowledge(state, user)
+        elif step == "account_question":
+            run_demo_account_question(state, user)
+        elif step == "account_request":
+            run_demo_account_request(state, user)
+        elif step == "account_approve":
+            run_demo_account_approve(state, user)
+        elif step == "fallback_question":
+            run_demo_fallback_question(state, user)
         elif step == "audit_summary":
             run_demo_audit_summary(state)
         else:
@@ -204,6 +251,7 @@ def run_demo_user_ask(state: dict[str, Any], user: dict[str, Any]) -> None:
         },
     )
     state["conversation_id"] = conversation_id
+    state["vpn_model_status"] = model_result.get("status", "unknown")
     state["user_window"]["messages"] = [
         {"role": "user", "content": question},
         {"role": "assistant", "content": answer, "references": refs},
@@ -458,6 +506,220 @@ def run_demo_publish_knowledge(state: dict[str, Any], user: dict[str, Any]) -> N
     demo_event(state, "admin", "管理员审核发布知识", f"知识候选 #{knowledge_id} 已发布，后续同类问题可进入 RAG 检索。")
 
 
+def run_demo_account_question(state: dict[str, Any], user: dict[str, Any]) -> None:
+    if state.get("account_conversation_id"):
+        return
+    requester = demo_requester_user(user)
+    question = state["account_question"]
+    retrieval = rag_service.search(question)
+    refs = serialize_rag_references(retrieval.references)
+    draft = build_issue_draft_by_rules(question)
+    decision = build_employee_decision(question, retrieval, refs, draft)
+    answer = build_controlled_operation_answer(decision, refs)
+    agent_result = agent_service.run(question, rag_service, build_issue_draft_by_rules, retrieval, draft)
+    now = utc_now()
+    with connect() as conn:
+        conn.execute(
+            "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
+            (f"{state['prefix']} {question}", answer, 1, "controlled-fallback", json.dumps(refs, ensure_ascii=False), now),
+        )
+        cur = conn.execute(
+            "insert into qa_conversations(user_id,title,status,created_at,updated_at) values(?,?,?,?,?)",
+            (requester.get("id"), f"{state['prefix']} 账号受控审批演示", "active", now, now),
+        )
+        conversation_id = int(cur.lastrowid)
+    write_qa_message(conversation_id, "user", question)
+    write_qa_message(
+        conversation_id,
+        "assistant",
+        answer,
+        {
+            "agent": agent_result,
+            "automation_summary": decision["automation_summary"],
+            "confidence": decision["confidence"],
+            "handoff_reasons": decision["handoff_reasons"],
+            "issue_draft": decision["issue_draft"],
+            "missing_fields": decision["missing_fields"],
+            "model_status": "controlled-fallback",
+            "need_human": True,
+            "next_actions": decision["next_actions"],
+            "references": refs,
+            "risk_level": decision["risk_level"],
+        },
+    )
+    state["account_conversation_id"] = conversation_id
+    state["user_window"].setdefault("messages", []).extend(
+        [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer, "references": refs},
+        ]
+    )
+    state["agent_window"] = {
+        **state.get("agent_window", {}),
+        "answer": answer,
+        "controlled": {
+            "answer": answer,
+            "decision": decision,
+            "question": question,
+            "references": refs,
+            "trace": agent_result["trace"],
+        },
+        "decision": decision,
+        "draft": decision["issue_draft"],
+        "references": refs,
+        "trace": agent_result["trace"],
+        "tools_used": agent_result["tools_used"],
+        "model_status": "controlled-fallback",
+    }
+    state["account_window"] = {
+        **state.get("account_window", {}),
+        "answer": answer,
+        "decision": decision,
+        "question": question,
+        "status": "handoff_required",
+    }
+    demo_event(state, "agent", "识别账号高风险请求", "数字员工判断账号解冻属于受控操作，不输出绕过审批步骤，只生成人工审批流转建议。")
+
+
+def run_demo_account_request(state: dict[str, Any], user: dict[str, Any]) -> None:
+    if state.get("account_approval_id"):
+        return
+    account_name = state["account_name"]
+    requester = demo_ops_user(user)
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute("select * from ops_accounts where account_name=?", (account_name,)).fetchone()
+        if row:
+            account_id = int(row["id"])
+        else:
+            cur = conn.execute(
+                """
+                insert into ops_accounts(
+                  account_name,owner_name,department,contact_phone,permission_scope,status,risk_level,expires_at,remark,created_at,updated_at
+                ) values(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    account_name,
+                    "Alice",
+                    "运维中心",
+                    "13800138000",
+                    "vpn_bastion_ops",
+                    "frozen",
+                    "high",
+                    "2026-12-31",
+                    f"{state['prefix']} Demo 预置冻结账号，用于演示受控解冻审批",
+                    now,
+                    now,
+                ),
+            )
+            account_id = int(cur.lastrowid)
+            write_audit(conn, "demo_account_seed", "ops_account", f"{state['prefix']} Demo 创建冻结运维账号：{account_name}", account_id)
+        approval_id = create_account_approval_record(
+            conn,
+            account_id,
+            "unfreeze",
+            {},
+            "Demo：远程值班需要临时解冻，需管理员审批后生效",
+            requester,
+        )
+        account_row = conn.execute("select * from ops_accounts where id=?", (account_id,)).fetchone()
+        approval_row = conn.execute("select * from account_approvals where id=?", (approval_id,)).fetchone()
+    state["account_id"] = account_id
+    state["account_approval_id"] = approval_id
+    state["account_window"] = {
+        **state.get("account_window", {}),
+        "account": dict(account_row) if account_row else {"id": account_id, "account_name": account_name, "status": "frozen"},
+        "approval": dict(approval_row) if approval_row else {"id": approval_id, "action": "unfreeze", "status": "pending"},
+        "status": "pending_approval",
+    }
+    state["ops_window"]["account_approval"] = state["account_window"]["approval"]
+    demo_event(state, "ops", "提交账号解冻审批", f"运维人员没有直接解冻 {account_name}，而是创建审批单 #{approval_id}，等待管理员确认。")
+
+
+def run_demo_account_approve(state: dict[str, Any], user: dict[str, Any]) -> None:
+    approval_id = int(state.get("account_approval_id") or 0)
+    account_id = int(state.get("account_id") or 0)
+    if not approval_id or not account_id:
+        raise HTTPException(status_code=400, detail="请先提交账号审批")
+    if state.get("account_window", {}).get("approval", {}).get("status") == "approved":
+        return
+    decide_account_approval(
+        approval_id,
+        AccountApprovalDecision(decision="approved", reason="Demo：审批通过，按受控流程解冻账号"),
+        user,
+    )
+    with connect() as conn:
+        account_row = conn.execute("select * from ops_accounts where id=?", (account_id,)).fetchone()
+        approval_row = conn.execute("select * from account_approvals where id=?", (approval_id,)).fetchone()
+    account = dict(account_row) if account_row else {}
+    approval = dict(approval_row) if approval_row else {}
+    state["account_window"] = {
+        **state.get("account_window", {}),
+        "account": account,
+        "approval": approval,
+        "status": "approved",
+    }
+    state["ops_window"]["account_approval"] = approval
+    state["admin_window"]["account"] = account
+    state["admin_window"]["account_approval"] = approval
+    demo_event(state, "admin", "管理员审批账号解冻", f"管理员审批通过 #{approval_id}，账号 {account.get('account_name')} 状态变为 {account.get('status')}，全程写入审计。")
+
+
+def run_demo_fallback_question(state: dict[str, Any], user: dict[str, Any]) -> None:
+    if state.get("fallback_conversation_id"):
+        return
+    requester = demo_requester_user(user)
+    question = state["fallback_question"]
+    retrieval = rag_service.search(question)
+    refs = serialize_rag_references(retrieval.references) if retrieval.confidence >= 0.08 else []
+    answer = (
+        "这个问题没有命中企业运维知识库中的可引用依据，我不能编造食堂菜单。"
+        "请通过后勤公告或企业门户查询；如果是运维服务问题，可以继续描述故障现象、影响范围和联系方式。"
+    )
+    now = utc_now()
+    with connect() as conn:
+        conn.execute(
+            "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
+            (f"{state['prefix']} {question}", answer, 0, "knowledge-boundary", json.dumps(refs, ensure_ascii=False), now),
+        )
+        cur = conn.execute(
+            "insert into qa_conversations(user_id,title,status,created_at,updated_at) values(?,?,?,?,?)",
+            (requester.get("id"), f"{state['prefix']} 知识边界演示", "active", now, now),
+        )
+        conversation_id = int(cur.lastrowid)
+    write_qa_message(conversation_id, "user", question)
+    write_qa_message(
+        conversation_id,
+        "assistant",
+        answer,
+        {
+            "model_status": "knowledge-boundary",
+            "need_human": False,
+            "next_actions": ["说明知识边界", "引导用户到正确渠道", "不生成运维工单"],
+            "references": refs,
+            "risk_level": "low",
+        },
+    )
+    state["fallback_conversation_id"] = conversation_id
+    state["user_window"].setdefault("messages", []).extend(
+        [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer, "references": refs},
+        ]
+    )
+    state["agent_window"] = {
+        **state.get("agent_window", {}),
+        "boundary": {
+            "answer": answer,
+            "question": question,
+            "references": refs,
+            "status": "refused_without_knowledge",
+        },
+        "model_status": "knowledge-boundary",
+    }
+    demo_event(state, "agent", "知识边界拒绝编造", "数字员工没有知识库依据时不会编造答案，也不会为非运维问题创建在线记录。")
+
+
 def run_demo_audit_summary(state: dict[str, Any]) -> None:
     if state["admin_window"].get("audit"):
         return
@@ -477,8 +739,10 @@ def run_demo_audit_summary(state: dict[str, Any]) -> None:
             "pending_knowledge": conn.execute("select count(*) from knowledge where status='pending_review'").fetchone()[0],
             "published_knowledge": conn.execute("select count(*) from knowledge where status='published'").fetchone()[0],
             "audit_logs": conn.execute("select count(*) from audit_logs").fetchone()[0],
+            "accounts": conn.execute("select count(*) from ops_accounts").fetchone()[0],
+            "account_approvals": conn.execute("select count(*) from account_approvals").fetchone()[0],
         }
     state["admin_window"]["audit"] = rows_to_dicts(audit_rows)
     state["admin_window"]["qa_logs"] = rows_to_dicts(qa_rows)
     state["admin_window"]["stats"] = stats_snapshot
-    demo_event(state, "auditor", "审计统计完成", f"已汇总 {len(audit_rows)} 条 Demo 审计日志和当前系统指标。")
+    demo_event(state, "auditor", "审计统计完成", f"已汇总 {len(audit_rows)} 条 Demo 审计日志、问答记录、在线记录、知识发布和账号审批指标。")

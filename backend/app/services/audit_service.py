@@ -9,6 +9,16 @@ from ..database import connect, rows_to_dicts
 
 ISSUE_ACTIVE_STATUSES = {"accepted", "handled", "need_user_info", "pending", "processing", "submitted"}
 ISSUE_PENDING_VISIT_STATUSES = {"handled", "pending_visit"}
+CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@")
+
+
+def safe_csv_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    visible_value = value.lstrip(" \t\r\n")
+    if visible_value and visible_value[0] in CSV_DANGEROUS_PREFIXES:
+        return f"'{value}"
+    return value
 
 
 def fetch_audit_payload(
@@ -19,6 +29,7 @@ def fetch_audit_payload(
     q: str = "",
     need_human: str = "",
 ) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 2000))
     audit_where: list[str] = []
     audit_params: list[Any] = []
     if event_type:
@@ -90,7 +101,7 @@ def build_audit_csv(audit_rows: list[dict[str, Any]], qa_rows: list[dict[str, An
                 row.get("event_type", ""),
                 row.get("target_type", ""),
                 row.get("target_id", ""),
-                row.get("content", ""),
+                safe_csv_value(row.get("content", "")),
                 "",
                 "",
                 "",
@@ -107,8 +118,8 @@ def build_audit_csv(audit_rows: list[dict[str, Any]], qa_rows: list[dict[str, An
                 "qa_log",
                 row.get("id", ""),
                 "",
-                row.get("question", ""),
-                row.get("answer", ""),
+                safe_csv_value(row.get("question", "")),
+                safe_csv_value(row.get("answer", "")),
                 row.get("need_human", ""),
                 row.get("model_status", ""),
                 row.get("created_at", ""),

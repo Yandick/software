@@ -3,10 +3,13 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_JWT_SECRET = "please-change-this-secret-for-dev-only-32"
+KNOWN_ENVIRONMENTS = {"dev", "development", "prod", "production", "staging", "test", "testing"}
+PRODUCTION_ENVIRONMENTS = {"prod", "production", "staging"}
 
 
 class Settings(BaseSettings):
     app_name: str = "运维数字员工系统"
+    app_version: str = "1.0.0-demo"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///backend/data/app.db"
     environment: str = "development"
@@ -14,6 +17,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 8
     seed_demo_accounts: bool = True
+    cors_origins: str = "http://127.0.0.1:5666,http://localhost:5666"
     model_path: str = "models/qwen3-1.7b"
     vllm_base_url: str = "http://127.0.0.1:8000/v1"
     vllm_model_name: str = "qwen3-1.7b"
@@ -28,14 +32,28 @@ class Settings(BaseSettings):
     def db_path(self) -> Path:
         if self.database_url.startswith("sqlite:///"):
             return Path(self.database_url.removeprefix("sqlite:///"))
-        return Path("backend/data/app.db")
+        raise ValueError("Only sqlite:/// OPS_DATABASE_URL is supported by the runtime database layer")
+
+    @property
+    def environment_name(self) -> str:
+        return self.environment.strip().lower()
 
     @property
     def is_production(self) -> bool:
-        return self.environment.lower() in {"prod", "production"}
+        return self.environment_name in PRODUCTION_ENVIRONMENTS
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        values = [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+        return values or ["http://127.0.0.1:5666", "http://localhost:5666"]
 
 
 def validate_production_settings(settings: Settings) -> None:
+    if settings.environment_name not in KNOWN_ENVIRONMENTS:
+        raise RuntimeError(
+            "Unsafe environment configuration: OPS_ENVIRONMENT must be one of "
+            + ", ".join(sorted(KNOWN_ENVIRONMENTS))
+        )
     if not settings.is_production:
         return
     errors = []
@@ -43,6 +61,8 @@ def validate_production_settings(settings: Settings) -> None:
         errors.append("OPS_JWT_SECRET must be set to a non-default value with at least 32 characters")
     if settings.seed_demo_accounts:
         errors.append("OPS_SEED_DEMO_ACCOUNTS must be false in production")
+    if "*" in settings.cors_origin_list:
+        errors.append("OPS_CORS_ORIGINS must not contain * in production")
     if errors:
         raise RuntimeError("Unsafe production configuration: " + "; ".join(errors))
 

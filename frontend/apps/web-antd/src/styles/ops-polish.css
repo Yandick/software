@@ -5,12 +5,10 @@
   --ops-accent: #0f766e;
   --ops-amber: #d97706;
   --ops-border: rgb(15 23 42 / 9%);
-  --ops-card: rgb(255 255 255 / 86%);
+  --ops-card: #fff;
   --ops-ink: #0f172a;
   --ops-muted: #64748b;
-  background:
-    linear-gradient(120deg, rgb(15 118 110 / 8%) 0 1px, transparent 1px 70px),
-    linear-gradient(150deg, #f8fafc 0%, #eff8f5 46%, #fff7ed 100%);
+  background: #f5f7fa;
   color: var(--ops-ink);
   min-height: calc(100vh - 96px);
   position: relative;
@@ -20,13 +18,8 @@
 .account-page::before,
 .knowledge-page::before,
 .audit-page::before {
-  background:
-    linear-gradient(90deg, rgb(15 23 42 / 7%) 1px, transparent 1px),
-    linear-gradient(rgb(15 23 42 / 6%) 1px, transparent 1px);
-  background-size: 44px 44px;
   content: '';
   inset: 0;
-  mask-image: linear-gradient(to bottom, #000, transparent 72%);
   pointer-events: none;
   position: absolute;
 }
@@ -38,53 +31,72 @@
   position: relative;
 }
 
-.issue-page > .mb-5.rounded-3xl,
-.account-page > .mb-5.rounded-3xl,
-.knowledge-page > .mb-5.rounded-3xl,
+.ops-hero,
 .audit-hero {
   align-items: end;
   background:
-    linear-gradient(120deg, rgb(255 255 255 / 10%) 0 1px, transparent 1px 56px),
-    linear-gradient(135deg, #0b1220 0%, #103a3a 58%, #7c2d12 100%) !important;
-  border: 1px solid rgb(255 255 255 / 14%);
-  box-shadow: 0 22px 70px rgb(15 23 42 / 18%);
+    linear-gradient(90deg, rgb(15 118 110 / 8%) 0 4px, transparent 4px),
+    #fff !important;
+  border: 1px solid #d8dee8 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 14px 34px rgb(15 23 42 / 7%);
+  color: var(--ops-ink) !important;
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.38fr);
   overflow: hidden;
+  padding: 24px;
   position: relative;
 }
 
-.issue-page > .mb-5.rounded-3xl::after,
-.account-page > .mb-5.rounded-3xl::after,
-.knowledge-page > .mb-5.rounded-3xl::after,
+.ops-hero::after,
 .audit-hero::after {
-  background: linear-gradient(90deg, #38bdf8, #14b8a6, #f59e0b, #fb7185);
+  background: linear-gradient(90deg, #0f766e, #14b8a6, #d97706);
   content: '';
   height: 3px;
   inset: auto 0 0;
   position: absolute;
 }
 
-.issue-page > .mb-5.rounded-3xl > div:first-child,
-.account-page > .mb-5.rounded-3xl > div:first-child,
-.knowledge-page > .mb-5.rounded-3xl > div:first-child {
+.ops-kicker,
+.audit-hero .eyebrow {
+  color: var(--ops-accent) !important;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.ops-hero > .ops-kicker {
   grid-column: 1;
 }
 
-.issue-page > .mb-5.rounded-3xl > h1,
-.issue-page > .mb-5.rounded-3xl > p,
-.account-page > .mb-5.rounded-3xl > h1,
-.account-page > .mb-5.rounded-3xl > p,
-.knowledge-page > .mb-5.rounded-3xl > h1,
-.knowledge-page > .mb-5.rounded-3xl > p {
+.ops-hero > h1,
+.ops-hero > p {
   grid-column: 1;
+}
+
+.ops-hero h1,
+.audit-hero h1 {
+  color: var(--ops-ink) !important;
+  font-size: 28px;
+  font-weight: 800;
+  line-height: 1.25;
+  margin: 8px 0 0;
+}
+
+.ops-hero p,
+.audit-hero p {
+  color: var(--ops-muted) !important;
+  line-height: 1.7;
+  margin: 0;
+  max-width: 760px;
 }
 
 .ops-hero-metrics {
-  background: rgb(255 255 255 / 10%);
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 18px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
   display: grid;
   gap: 8px;
   grid-column: 2;
@@ -94,9 +106,9 @@
 }
 
 .ops-hero-metrics span {
-  background: rgb(15 23 42 / 34%);
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
   min-width: 0;
   padding: 10px;
 }
@@ -111,13 +123,13 @@
 }
 
 .ops-hero-metrics b {
-  color: #fff;
+  color: var(--ops-ink);
   font-size: 24px;
   line-height: 1;
 }
 
 .ops-hero-metrics small {
-  color: rgb(204 251 241 / 76%);
+  color: var(--ops-muted);
   font-size: 12px;
   margin-top: 7px;
 }
@@ -128,7 +140,8 @@
 .audit-page .ant-card {
   background: var(--ops-card);
   border: 1px solid var(--ops-border);
-  box-shadow: 0 18px 52px rgb(15 23 42 / 8%);
+  border-radius: 8px !important;
+  box-shadow: 0 10px 28px rgb(15 23 42 / 6%);
   overflow: hidden;
 }
 
@@ -184,6 +197,7 @@
 .audit-page .metric-card,
 .audit-page .ratio-box {
   backdrop-filter: blur(16px);
+  border-radius: 8px !important;
   border-color: rgb(15 23 42 / 8%) !important;
   box-shadow: 0 14px 34px rgb(15 23 42 / 6%);
 }
@@ -725,9 +739,7 @@ html.dark .portal-page .ant-tag-gold {
 }
 
 @media (max-width: 1180px) {
-  .issue-page > .mb-5.rounded-3xl,
-  .account-page > .mb-5.rounded-3xl,
-  .knowledge-page > .mb-5.rounded-3xl,
+  .ops-hero,
   .audit-hero {
     grid-template-columns: 1fr;
   }

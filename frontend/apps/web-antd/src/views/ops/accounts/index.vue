@@ -198,6 +198,10 @@ async function decideApproval(id: number, decision: string) {
   }
 }
 
+function isOwnApproval(record: any) {
+  return Number(record.requested_by) === Number(userStore.userInfo?.userId);
+}
+
 async function downloadAccounts() {
   if (!canExport.value) {
     message.warning('只有管理员或审计员可以导出账号清单');
@@ -297,10 +301,10 @@ onMounted(load);
 
 <template>
   <div class="account-page p-5">
-    <div class="mb-5 rounded-3xl bg-slate-950 p-6 text-white">
-      <div class="text-sm font-semibold uppercase tracking-[0.2em] text-emerald-200">Account Console</div>
-      <h1 class="mt-3 text-3xl font-semibold">运维账号管理</h1>
-      <p class="mt-3 max-w-3xl text-white/70">
+    <div class="ops-hero mb-5">
+      <div class="ops-kicker">Account Console</div>
+      <h1>运维账号管理</h1>
+      <p>
         账号新增由管理员执行；冻结、解冻和修改属于高风险操作，必须先提交审批，审批通过后才会真正生效。
       </p>
       <div class="ops-hero-metrics">
@@ -428,10 +432,10 @@ onMounted(load);
           </template>
           <template v-if="column.key === 'actionButtons'">
             <a-space v-if="record.status === 'pending'">
-              <a-button :disabled="!isAdmin" size="small" type="primary" @click="decideApproval(record.id, 'approved')">
+              <a-button :disabled="!isAdmin || isOwnApproval(record)" size="small" type="primary" @click="decideApproval(record.id, 'approved')">
                 通过
               </a-button>
-              <a-button :disabled="!isAdmin" danger size="small" @click="decideApproval(record.id, 'rejected')">
+              <a-button :disabled="!isAdmin || isOwnApproval(record)" danger size="small" @click="decideApproval(record.id, 'rejected')">
                 拒绝
               </a-button>
             </a-space>
@@ -483,6 +487,6 @@ onMounted(load);
 
 <style scoped>
 .account-page :deep(.ant-card) {
-  border-radius: 20px;
+  border-radius: 8px;
 }
 </style>

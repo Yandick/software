@@ -26,6 +26,16 @@ BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-90}"
 VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-40960}"
 
+SERVICE_NAMES=(frontend backend vllm)
+LEGACY_PID_FILES=(
+  "$RUN_DIR/frontend-local.pid"
+  "$RUN_DIR/backend-local.pid"
+  "$RUN_DIR/vllm-local.pid"
+  "$RUN_DIR/frontend-portal.pid"
+  "$RUN_DIR/backend-portal.pid"
+  "$RUN_DIR/vllm-portal.pid"
+)
+
 usage() {
   cat <<USAGE
 Usage: scripts/start_all.sh [options]
@@ -44,7 +54,7 @@ Env:
   OPS_VLLM_MODEL_NAME   vLLM served model name，默认 qwen3-1.7b
   VLLM_REASONING_PARSER vLLM reasoning parser，默认 qwen3
   VLLM_TIMEOUT          等待 vLLM 秒数，默认 420
-  VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率，默认 0.90
+  VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率，默认 0.55
   VLLM_MAX_MODEL_LEN    vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
 USAGE
 }
@@ -83,19 +93,69 @@ run_python_bg() {
   log "$name started, pid=$(cat "$RUN_DIR/$name.pid"), log=logs/$name.log"
 }
 
+pid_is_project_owned() {
+  local pid="$1" cwd cmdline
+  cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$cwd" == "$ROOT_DIR" || "$cwd" == "$ROOT_DIR/frontend" || "$cmdline" == *"$ROOT_DIR"* || "$cmdline" == *"backend.app.main"* || "$cmdline" == *"vllm.entrypoints.openai.api_server"* ]]
+}
+
+stop_pid() {
+  local pid="$1" label="$2"
+  if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+  log "stopping $label pid=$pid"
+  pkill -TERM -s "$pid" >/dev/null 2>&1 || true
+  kill -- "-$pid" >/dev/null 2>&1 || kill "$pid" >/dev/null 2>&1 || true
+}
+
+kill_pid_if_alive() {
+  local pid="$1" label="$2"
+  if [[ -n "$pid" && "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" >/dev/null 2>&1; then
+    log "force stopping $label pid=$pid"
+    pkill -KILL -s "$pid" >/dev/null 2>&1 || true
+    kill -- "-$pid" >/dev/null 2>&1 || kill -KILL "$pid" >/dev/null 2>&1 || true
+  fi
+}
+
 stop_pid_file() {
-  local pid_file="$1" pid
+  local pid_file="$1" label="${2:-runtime}" pid
   if [[ ! -f "$pid_file" ]]; then
     return 0
   fi
   pid="$(cat "$pid_file" 2>/dev/null || true)"
   if [[ -n "$pid" ]]; then
-    pkill -TERM -s "$pid" >/dev/null 2>&1 || true
-    kill -- "-$pid" >/dev/null 2>&1 || kill "$pid" >/dev/null 2>&1 || true
+    if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+      log "skip invalid pid file $pid_file: pid=$pid"
+      rm -f "$pid_file"
+      return 0
+    fi
+    if kill -0 "$pid" >/dev/null 2>&1 && ! pid_is_project_owned "$pid"; then
+      local cwd
+      cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+      log "skip non-project pid file $pid_file: pid=$pid cwd=$cwd"
+      rm -f "$pid_file"
+      return 0
+    fi
+    stop_pid "$pid" "$label"
     sleep 1
-    pkill -KILL -s "$pid" >/dev/null 2>&1 || true
+    kill_pid_if_alive "$pid" "$label"
   fi
   rm -f "$pid_file"
+}
+
+stop_known_pid_files() {
+  local name pid_file
+  for name in "${SERVICE_NAMES[@]}"; do
+    stop_pid_file "$RUN_DIR/$name.pid" "$name"
+  done
+  for pid_file in "${LEGACY_PID_FILES[@]}"; do
+    stop_pid_file "$pid_file" "legacy $(basename "$pid_file" .pid)"
+  done
 }
 
 pnpm_cmd() {
@@ -134,7 +194,7 @@ cleanup() {
   fi
   CLEANED_UP=1
   log "stopping services..."
-  for name in frontend backend vllm; do
+  for name in "${SERVICE_NAMES[@]}"; do
     stop_pid_file "$RUN_DIR/$name.pid"
   done
 }
@@ -165,10 +225,48 @@ wait_http() {
   done
 }
 
-check_port_free() {
-  local port="$1" label="$2"
-  if command -v ss >/dev/null 2>&1 && ss -ltn "sport = :$port" | grep -q ":$port"; then
-    log "$label port $port is already in use. 请先释放端口或修改环境变量。"
+pids_on_port() {
+  local port="$1"
+  if ! command -v ss >/dev/null 2>&1; then
+    return 0
+  fi
+  ss -ltnp "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true
+}
+
+ensure_port_available() {
+  local port="$1" label="$2" pids pid blockers=()
+  mapfile -t pids < <(pids_on_port "$port")
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  for pid in "${pids[@]}"; do
+    if pid_is_project_owned "$pid"; then
+      stop_pid "$pid" "$label port $port"
+    else
+      blockers+=("$pid")
+    fi
+  done
+  sleep 1
+  for pid in "${pids[@]}"; do
+    if pid_is_project_owned "$pid"; then
+      kill_pid_if_alive "$pid" "$label port $port"
+    fi
+  done
+
+  mapfile -t pids < <(pids_on_port "$port")
+  blockers=()
+  for pid in "${pids[@]}"; do
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      blockers+=("$pid")
+    fi
+  done
+  if [[ "${#blockers[@]}" -gt 0 ]]; then
+    log "$label port $port is already in use by non-project process(es): ${blockers[*]}"
+    for pid in "${blockers[@]}"; do
+      ps -fp "$pid" || true
+    done
+    log "请先释放端口或修改环境变量：BACKEND_PORT / FRONTEND_PORT / OPS_VLLM_PORT。"
     exit 1
   fi
 }
@@ -214,6 +312,7 @@ PY2
 cd "$ROOT_DIR"
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 export OPS_CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+export BACKEND_HOST BACKEND_PORT FRONTEND_HOST FRONTEND_PORT
 
 require_cmd "$PYTHON_BIN"
 require_cmd curl
@@ -231,9 +330,10 @@ log "node: $([[ "$START_FRONTEND" == 1 ]] && command -v node || echo 'not requir
 log "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 log "vLLM memory config: gpu_memory_utilization=$VLLM_GPU_MEMORY_UTILIZATION, max_model_len=$VLLM_MAX_MODEL_LEN"
 
-check_port_free "$BACKEND_PORT" backend
-if [[ "$START_FRONTEND" == 1 ]]; then check_port_free "$FRONTEND_PORT" frontend; fi
-check_port_free "$VLLM_PORT" vLLM
+stop_known_pid_files
+ensure_port_available "$BACKEND_PORT" backend
+if [[ "$START_FRONTEND" == 1 ]]; then ensure_port_available "$FRONTEND_PORT" frontend; fi
+ensure_port_available "$VLLM_PORT" vLLM
 check_gpu_memory
 
 log "starting vLLM for Qwen3: $MODEL_PATH"

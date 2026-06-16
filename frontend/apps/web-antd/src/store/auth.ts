@@ -77,7 +77,7 @@ export const useAuthStore = defineStore('auth', () => {
     };
   }
 
-  async function logout(redirect: boolean = true) {
+  async function logout(redirect: boolean = true, targetPath: string = LOGIN_PATH) {
     try {
       await logoutApi();
     } catch {
@@ -86,14 +86,17 @@ export const useAuthStore = defineStore('auth', () => {
     resetAllStores();
     accessStore.setLoginExpired(false);
 
+    if (!redirect) {
+      await router.replace(targetPath);
+      return;
+    }
+
     // 回登录页带上当前路由地址
     await router.replace({
-      path: LOGIN_PATH,
-      query: redirect
-        ? {
-            redirect: encodeURIComponent(router.currentRoute.value.fullPath),
-          }
-        : {},
+      path: targetPath,
+      query: {
+        redirect: encodeURIComponent(router.currentRoute.value.fullPath),
+      },
     });
   }
 

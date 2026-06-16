@@ -25,6 +25,7 @@ const externalRoutes: RouteRecordRaw[] = [
       hideInBreadcrumb: true,
       hideInMenu: true,
       hideInTab: true,
+      ignoreAccess: true,
       title: '服务门户',
     },
     name: 'Portal',

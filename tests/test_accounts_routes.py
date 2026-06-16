@@ -5,7 +5,7 @@ from typing import Callable
 from fastapi.testclient import TestClient
 
 
-def create_account(client: TestClient, headers: dict[str, str], name: str) -> int:
+def create_account(client: TestClient, headers: dict[str, str], name: str, remark: str = "pytest") -> int:
     response = client.post(
         "/api/accounts",
         headers=headers,
@@ -16,7 +16,7 @@ def create_account(client: TestClient, headers: dict[str, str], name: str) -> in
             "expires_at": "2099-12-31",
             "owner_name": "测试负责人",
             "permission_scope": "basic_ops",
-            "remark": "pytest",
+            "remark": remark,
             "risk_level": "medium",
         },
     )
@@ -41,6 +41,19 @@ def test_admin_can_create_list_and_export_accounts(
     assert export.status_code == 200, export.text
     assert export.json()["count"] == 1
     assert "账号名" in export.json()["content"]
+
+
+def test_account_export_sanitizes_csv_formula_prefix(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    create_account(client, admin_headers, "pytest_csv_account", remark="\t=SUM(1,1)")
+
+    export = client.get("/api/accounts/export", params={"q": "pytest_csv_account"}, headers=admin_headers)
+
+    assert export.status_code == 200, export.text
+    assert "'\t=SUM(1,1)" in export.json()["content"]
 
 
 def test_user_cannot_access_account_console(
@@ -92,9 +105,10 @@ def test_account_freeze_and_unfreeze_approval_flow(
     auth_headers: Callable[[str, str], dict[str, str]],
 ) -> None:
     admin_headers = auth_headers("admin", "admin123")
+    ops_headers = auth_headers("ops", "ops123")
     account_id = create_account(client, admin_headers, "pytest_freeze_account")
 
-    freeze = client.post(f"/api/accounts/{account_id}/freeze", headers=admin_headers)
+    freeze = client.post(f"/api/accounts/{account_id}/freeze", headers=ops_headers)
     assert freeze.status_code == 200, freeze.text
     freeze_decision = client.post(
         f"/api/account-approvals/{freeze.json()['approval_id']}/decision",
@@ -105,7 +119,7 @@ def test_account_freeze_and_unfreeze_approval_flow(
     frozen = client.get("/api/accounts", params={"q": "pytest_freeze_account"}, headers=admin_headers)
     assert frozen.json()[0]["status"] == "frozen"
 
-    unfreeze = client.post(f"/api/accounts/{account_id}/unfreeze", headers=admin_headers)
+    unfreeze = client.post(f"/api/accounts/{account_id}/unfreeze", headers=ops_headers)
     assert unfreeze.status_code == 200, unfreeze.text
     unfreeze_decision = client.post(
         f"/api/account-approvals/{unfreeze.json()['approval_id']}/decision",
@@ -115,3 +129,21 @@ def test_account_freeze_and_unfreeze_approval_flow(
     assert unfreeze_decision.status_code == 200, unfreeze_decision.text
     active = client.get("/api/accounts", params={"q": "pytest_freeze_account"}, headers=admin_headers)
     assert active.json()[0]["status"] == "active"
+
+
+def test_account_approval_rejects_self_approval(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    account_id = create_account(client, admin_headers, "pytest_self_approval_account")
+
+    freeze = client.post(f"/api/accounts/{account_id}/freeze", headers=admin_headers)
+    assert freeze.status_code == 200, freeze.text
+    decision = client.post(
+        f"/api/account-approvals/{freeze.json()['approval_id']}/decision",
+        headers=admin_headers,
+        json={"decision": "approved", "reason": "self approval should fail"},
+    )
+    assert decision.status_code == 403, decision.text
+    assert "不能由申请人自己审批" in decision.json()["detail"]

@@ -11,7 +11,7 @@ from ..deps import ensure_row_exists
 from ..schemas import QuestionRequest
 from .agent_service import agent_service
 from .llm_service import llm_service
-from .rag_service import RagService
+from .rag_service import rag_service
 
 ISSUE_CATEGORY_KEYWORDS = {
     "account": ["账号", "密码", "登录", "权限", "冻结", "解冻", "用户"],
@@ -19,7 +19,10 @@ ISSUE_CATEGORY_KEYWORDS = {
     "business": ["系统", "应用", "页面", "业务", "接口", "访问慢", "报错"],
     "database": ["数据库", "mysql", "oracle", "redis", "连接池", "sql", "中间件"],
 }
-HIGH_PRIORITY_KEYWORDS = ["生产", "全公司", "全部", "大面积", "中断", "无法访问", "宕机", "紧急", "批量", "高优先级"]
+HIGH_PRIORITY_KEYWORDS = [
+    "生产", "全公司", "全部", "大面积", "中断", "无法访问", "宕机", "紧急", "批量", "高优先级",
+    "多人", "多名", "多个用户", "同部门", "部门多人", "业务截止",
+]
 LOW_PRIORITY_KEYWORDS = ["咨询", "了解", "低优先级", "不紧急"]
 RAG_EVAL_CASES = [
     {"query": "VPN 提示证书过期，远程办公无法连接", "expected": ["VPN", "证书"]},
@@ -27,10 +30,12 @@ RAG_EVAL_CASES = [
     {"query": "申请业务系统权限需要准备哪些审批信息", "expected": ["权限", "审批"]},
     {"query": "数据库连接失败需要先排查什么", "expected": ["数据库", "连接"]},
     {"query": "处理完成后怎么沉淀到知识库", "expected": ["知识库", "沉淀"]},
+    {"query": "MFA 验证码收不到，手机验证失败怎么办", "expected": ["MFA", "验证码", "多因素认证"]},
+    {"query": "Outlook 一直离线，收不到邮件怎么处理", "expected": ["Outlook", "邮箱", "邮件"]},
+    {"query": "打印机任务卡在队列里，无法打印怎么办", "expected": ["打印机", "打印"]},
+    {"query": "公司 Wi-Fi 连不上，DNS 解析失败怎么排查", "expected": ["Wi-Fi", "网络", "DNS"]},
+    {"query": "业务系统白屏并提示 500 或 502 超时", "expected": ["业务系统", "500", "502"]},
 ]
-
-rag_service = RagService()
-
 
 def build_issue_draft_by_rules(description: str) -> dict[str, Any]:
     text = description.strip()
@@ -97,7 +102,10 @@ def build_issue_draft(description: str, use_llm: bool = True) -> dict[str, Any]:
     if not use_llm:
         return rule_draft
     try:
-        return llm_service.extract_issue_draft(description, rule_draft)
+        draft = llm_service.extract_issue_draft(description, rule_draft)
+        if rule_draft.get("priority") == "high" and draft.get("priority") != "high":
+            draft = {**draft, "priority": "high"}
+        return draft
     except RuntimeError as exc:
         return {
             **rule_draft,
@@ -122,7 +130,7 @@ def build_employee_decision(
     else:
         risk_level = "medium"
 
-    need_human = retrieval.high_risk or retrieval.confidence < 0.08 or not references
+    need_human = retrieval.high_risk or draft["priority"] == "high" or retrieval.confidence < 0.08 or not references
     handoff_reasons = []
     if retrieval.high_risk:
         handoff_reasons.append("涉及高风险账号、权限、生产或批量操作，需要人工受控处理")
@@ -130,6 +138,8 @@ def build_employee_decision(
         handoff_reasons.append("私有知识库没有命中可引用知识")
     elif retrieval.confidence < 0.08:
         handoff_reasons.append("知识命中置信度较低，需要人工确认")
+    if draft["priority"] == "high" and not retrieval.high_risk:
+        handoff_reasons.append("影响范围或紧急程度较高，需要运维人员跟进确认")
     if draft["missing_fields"]:
         handoff_reasons.append(f"缺少关键信息：{'、'.join(draft['missing_fields'])}")
 
@@ -220,6 +230,35 @@ def serialize_rag_references(references: list[dict[str, Any]]) -> list[dict[str,
     return payload
 
 
+def build_no_context_answer(decision: dict[str, Any]) -> str:
+    missing = decision.get("missing_fields") or []
+    reasons = decision.get("handoff_reasons") or ["私有知识库没有命中可靠依据"]
+    missing_text = "、".join(missing) if missing else "问题现象、影响范围、联系方式和错误截图/日志"
+    reason_text = "；".join(str(item) for item in reasons)
+    return (
+        "1) 结论：当前私有知识库没有命中足够可靠的依据，数字员工不能编造处理结论。\n"
+        "2) 处理步骤：请先补充关键信息，并创建在线记录交由运维人员核实。\n"
+        f"3) 需要补充的信息：{missing_text}。\n"
+        f"4) 是否建议转人工：建议转人工。原因：{reason_text}。\n"
+        "5) 引用来源：暂无可引用知识。"
+    )
+
+
+def build_controlled_operation_answer(decision: dict[str, Any], references: list[dict[str, Any]]) -> str:
+    reasons = decision.get("handoff_reasons") or ["涉及高风险账号、权限、生产或批量操作，需要人工受控处理"]
+    missing = decision.get("missing_fields") or []
+    refs = [f"#{item.get('id')} {item.get('title', '')}" for item in references[:3]]
+    missing_text = "、".join(missing) if missing else "申请人身份、审批依据、目标账号/权限范围、影响范围和回退方案"
+    refs_text = "；".join(refs) if refs else "暂无可引用知识"
+    return (
+        "1) 结论：该请求涉及受控账号、权限或生产变更，数字员工不能直接执行，也不能提供绕过审批的操作步骤。\n"
+        "2) 处理步骤：请创建在线记录或账号审批单，由授权运维/管理员核验身份、审批依据、影响范围和回退方案后处理。\n"
+        f"3) 需要补充的信息：{missing_text}。\n"
+        f"4) 是否建议转人工：必须转人工。原因：{'；'.join(str(item) for item in reasons)}。\n"
+        f"5) 引用来源：{refs_text}。"
+    )
+
+
 def parse_message_metadata(value: str) -> dict[str, Any]:
     try:
         parsed = json.loads(value or "{}")
@@ -285,16 +324,28 @@ def write_qa_message(conversation_id: int, role: str, content: str, metadata: di
 def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
     conversation_id, effective_question = prepare_qa_conversation(data, user)
     result = rag_service.search(effective_question)
-    draft = build_issue_draft(effective_question)
+    refs = serialize_rag_references(result.references)
+    should_use_llm = bool(refs) and result.confidence >= 0.08 and not result.high_risk
+    draft = build_issue_draft(effective_question, use_llm=should_use_llm)
     agent_result = agent_service.run(effective_question, rag_service, build_issue_draft, result, draft)
     context = rag_service.build_context(result.references)
+    decision = build_employee_decision(effective_question, result, refs, draft)
     try:
-        model_result = llm_service.generate(effective_question, context, data.enable_thinking)
+        model_result = (
+            llm_service.generate(effective_question, context, data.enable_thinking)
+            if should_use_llm
+            else {
+                "content": build_controlled_operation_answer(decision, refs)
+                if result.high_risk
+                else build_no_context_answer(decision),
+                "reasoning_available": False,
+                "reasoning_enabled": False,
+                "status": "controlled-fallback" if result.high_risk else "rag-fallback",
+            }
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=f"LLM 数字员工不可用：{exc}") from exc
     answer = model_result["content"]
-    refs = serialize_rag_references(result.references)
-    decision = build_employee_decision(effective_question, result, refs, draft)
     need_human = decision["need_human"]
     if need_human:
         answer += "\n\n系统判断该问题建议转人工：请创建在线记录，补充影响范围、联系方式和错误截图/日志。"
@@ -318,6 +369,7 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
             "issue_draft": decision["issue_draft"],
             "missing_fields": decision["missing_fields"],
             "model_status": model_result.get("status", "unknown"),
+            "llm_used": should_use_llm,
             "risk_level": decision["risk_level"],
             "need_human": need_human,
             "next_actions": decision["next_actions"],
@@ -351,7 +403,7 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
         "automation_summary": decision["automation_summary"],
         "handoff_reasons": decision["handoff_reasons"],
         "model_status": model_result.get("status", "unknown"),
-        "llm_used": True,
+        "llm_used": should_use_llm,
         "reasoning_enabled": model_result.get("reasoning_enabled", False),
         "reasoning_available": model_result.get("reasoning_available", False),
         "agent": agent_result,

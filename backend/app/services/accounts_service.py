@@ -23,6 +23,7 @@ ACCOUNT_UPDATE_FIELDS = {
     "risk_level",
     "status",
 }
+CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@")
 
 
 def normalize_account_payload(action: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +63,15 @@ def account_row_to_dict(row: Any) -> dict[str, Any]:
     item = dict(row)
     item.update(account_expiry_meta(item.get("expires_at", "")))
     return item
+
+
+def safe_csv_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    visible_value = value.lstrip(" \t\r\n")
+    if visible_value and visible_value[0] in CSV_DANGEROUS_PREFIXES:
+        return f"'{value}"
+    return value
 
 
 def fetch_account_rows(conn: Any, q: str = "") -> list[Any]:
@@ -111,7 +121,7 @@ def build_accounts_csv(accounts: list[dict[str, Any]]) -> str:
     writer = csv.DictWriter(output, fieldnames=[key for key, _ in fields], extrasaction="ignore")
     writer.writerow({key: label for key, label in fields})
     for account in accounts:
-        writer.writerow(account)
+        writer.writerow({key: safe_csv_value(value) for key, value in account.items()})
     return output.getvalue()
 
 
@@ -276,6 +286,8 @@ def decide_account_approval(approval_id: int, data: AccountApprovalDecision, use
         approval = dict(row)
         if approval["status"] != "pending":
             raise HTTPException(status_code=400, detail="审批已处理")
+        if approval.get("requested_by") == user.get("id"):
+            raise HTTPException(status_code=403, detail="账号审批不能由申请人自己审批")
         if data.decision == "approved":
             apply_account_action(conn, approval, user)
         conn.execute(

@@ -15,4 +15,13 @@ export const overridesPreferences = defineOverridesPreferences({
   copyright: {
     enable: false,
   },
+  theme: {
+    builtinType: 'deep-green',
+    colorDestructive: 'hsl(348 83% 47%)',
+    colorPrimary: 'hsl(176 84% 32%)',
+    colorSuccess: 'hsl(160 84% 39%)',
+    colorWarning: 'hsl(35 92% 50%)',
+    mode: 'light',
+    radius: '0.5',
+  },
 });

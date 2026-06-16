@@ -297,6 +297,9 @@ def main() -> None:
         assert demo_body["agent_window"]["trace"][1]["tool"] == "knowledge_search"
         assert demo_body["ops_window"]["issue"]["status"] == "closed"
         assert demo_body["admin_window"]["knowledge"]["status"] == "published"
+        assert demo_body["account_window"]["approval"]["status"] == "approved"
+        assert demo_body["account_window"]["account"]["status"] == "active"
+        assert demo_body["fallback_conversation_id"]
         assert demo_body["admin_window"]["audit"]
         demo_issue_id = demo_body["ops_window"]["issue"]["id"]
         demo_conversation_id = demo_body["conversation_id"]

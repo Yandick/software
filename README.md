@@ -36,6 +36,7 @@ software/
 ├── docs/                     # 开发、依赖、任务清单文档
 ├── scripts/start_all.sh      # 一键启动脚本
 ├── scripts/stop_all.sh       # 停止脚本
+├── scripts/package_check.py   # 离线交付包装检查
 └── requirements-minimal.txt  # Python 最小依赖
 ```
 
@@ -96,7 +97,8 @@ cd ..
 
 默认服务地址：
 
-- 前端：http://127.0.0.1:5666
+- 用户服务门户：http://127.0.0.1:5666/portal
+- 工作人员管理台：http://127.0.0.1:5666/staff/login
 - 后端：http://127.0.0.1:8010/api/health
 - vLLM：http://127.0.0.1:8000/v1/models
 
@@ -117,6 +119,16 @@ cd ..
 ```bash
 ./scripts/stop_all.sh
 ```
+
+启动脚本统一写入 `.run/frontend.pid`、`.run/backend.pid`、`.run/vllm.pid`；停止脚本也会兼容清理历史的 `*-local.pid`/`*-portal.pid`，并按 `FRONTEND_PORT`、`BACKEND_PORT`、`OPS_VLLM_PORT` 检查和释放本项目占用的端口。
+
+本地生产效果按双入口组织：
+
+- 访问 `http://127.0.0.1:5666/` 会进入面向业务用户的服务门户，而不是后台登录页。
+- `/portal` 提供“用户 / 工作人员”两种身份登录；普通用户登录后只看到数字员工咨询、在线记录提交和本人处理进度。
+- 运维、管理员和审计员可在 `/portal` 选择“工作人员”登录，也可以直接从 `/staff/login` 登录，进入 `/ops/*` 管理界面。
+- 工作人员如果从用户门户误登录，会自动进入管理台；普通用户如果从工作人员入口误登录，会回到服务门户。
+- 登录后的用户门户和工作人员管理台右上角都提供一致位置的“门户首页 / 切换身份”操作。
 
 ## GPU 与显存参数
 
@@ -145,7 +157,9 @@ VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 CUDA_VISIBLE_DEVICES=6 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `CUDA_VISIBLE_DEVICES` | `0` | 指定可见 GPU |
-| `VLLM_GPU_MEMORY_UTILIZATION` | `0.90` | vLLM 显存利用率 |
+| `VLLM_GPU_MEMORY_UTILIZATION` | `0.55` | vLLM 显存利用率 |
+| `OPS_CORS_ORIGINS` | `http://127.0.0.1:5666,http://localhost:5666` | 允许访问后端 API 的前端来源，生产环境不要设为 `*` |
+| `OPS_APP_VERSION` | `1.0.0-demo` | 后端健康检查和系统信息展示的交付版本号 |
 | `VLLM_MAX_MODEL_LEN` | `40960` | vLLM 最大上下文长度 |
 | `OPS_MODEL_PATH` | `models/qwen3-1.7b` | 本地模型路径 |
 | `OPS_VLLM_MODEL_NAME` | `qwen3-1.7b` | vLLM served model name |
@@ -169,6 +183,11 @@ VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 CUDA_VISIBLE_DEVICES=6 
 | 普通用户 | `user` | `user123` |
 | 审计员 | `auditor` | `audit123` |
 
+入口建议：
+
+- 普通用户：打开 `/portal`，使用 `user / user123`。
+- 工作人员：打开 `/staff/login`，使用 `admin / admin123`、`ops / ops123` 或 `auditor / audit123`。
+
 关闭内置 Demo 账号 seed 后，可用离线脚本创建第一个生产管理员：
 
 ```bash
@@ -187,6 +206,27 @@ python scripts/check_dependencies.py
 ```
 
 如果缺少依赖，按提示安装即可。项目不绑定固定 conda 环境名；只要求在同一个已激活环境中具备 Python、vLLM、Node.js 和 pnpm。
+
+## 系统健康与包装检查
+
+离线交付包检查不需要启动后端或 GPU：
+
+```bash
+python scripts/package_check.py
+```
+
+如果要同时跑后端 pytest：
+
+```bash
+python scripts/package_check.py --run-tests
+```
+
+运行中的服务提供三个系统检查入口：
+
+- `/api/health`：公开进程存活检查，返回应用名和版本号。
+- `/api/ready`：公开后端就绪检查，覆盖配置和 SQLite schema。
+- `/api/ready?include_llm=true&require_llm=true`：完整链路就绪检查，额外要求 vLLM 可用。
+- `/api/system/info`：登录后查看系统版本、前端包、数据库类型、模型路径和功能开关，不返回密钥。
 
 ## 工程测试与迁移
 
@@ -224,23 +264,30 @@ alembic stamp head
 python scripts/run_acceptance.py
 ```
 
-该脚本会检查后端健康、vLLM 就绪、RAG smoke test、知识敏感信息检查、12 步闭环 Demo 和审计 CSV 导出。若刚更新过代码，请先重启后端；详细清单见 `docs/final-acceptance-checklist.md`。
+该脚本会检查后端健康、后端就绪、vLLM 就绪、RAG smoke test、知识敏感信息检查、脚本化闭环 Demo 和审计 CSV 导出。若刚更新过代码，请先重启后端；详细清单见 `docs/final-acceptance-checklist.md`。
+
+## 手动多角色录屏流程
+
+答辩录屏优先推荐按 `docs/demo-script.md` 手动操作。流程会真实打开用户门户和后台处理台，由你依次扮演普通用户、运维人员、管理员和审计员，完成用户提问、数字员工 RAG 回答、转人工、运维处理、用户查看处理结果、知识发布和审计展示。
+
+推荐问题和处理话术已写在文档里，正式录制时直接使用本地电脑的屏幕录制工具即可。
 
 ## 单页多角色闭环 Demo
 
-管理员登录后进入 `/ops/demo`，即可在一个浏览器页面内查看普通用户、数字员工、运维人员和管理员/审计员四个角色视角。页面支持重置链路、单步执行和自动推进，固定演示 VPN 证书过期问题从用户申告到知识发布、审计汇总的 12 步闭环。
+管理员从 `/staff/login` 登录后进入 `/ops/demo`，即可在一个浏览器页面内查看普通用户、数字员工、运维人员和管理员/审计员四个角色视角。该页面保留为监控大屏和备用演示入口，支持重置链路、单步执行和自动推进，固定演示 VPN 证书过期、账号解冻审批和知识边界三类预置问题。
 
 ```bash
 ./scripts/start_all.sh
 ```
 
-服务启动后访问前端，使用 `admin / admin123` 登录并打开 `/ops/demo`。
+服务启动后访问前端，使用 `admin / admin123` 在 `/staff/login` 登录并打开 `/ops/demo`。
 
 ## 开发与任务文档
 
+- `docs/current-todo.md`：当前项目整理和按优先级排列的待办清单。
 - `docs/task-checklist.md`：任务清单和完成度，每次继续开发前先看这里。
 - `docs/final-acceptance-checklist.md`：正式录屏和答辩前的一键验收清单。
-- `docs/deployment.md`：生产配置、数据库迁移、管理员初始化和 systemd 示例。
+- `docs/deployment.md`：生产配置、数据库迁移、管理员初始化、健康检查和 systemd 示例。
 - `docs/engineering-standards.md`：工程分层、测试、迁移和安全规范。
 - `docs/code-style.md`：代码与注释规范。
 - `docs/dependencies.md`：依赖说明。

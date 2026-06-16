@@ -229,16 +229,15 @@ onMounted(load);
 
 <style scoped>
 .audit-page :deep(.ant-card) {
-  border-radius: 20px;
+  border-radius: 8px;
 }
 
 .audit-hero {
   align-items: center;
-  background:
-    radial-gradient(circle at 84% 12%, rgb(56 189 248 / 30%), transparent 30%),
-    linear-gradient(135deg, #0f172a, #1e3a8a 55%, #0f766e);
-  border-radius: 28px;
-  color: #fff;
+  background: #fff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  color: #111827;
   display: flex;
   justify-content: space-between;
   padding: 24px;
@@ -251,15 +250,15 @@ onMounted(load);
 }
 
 .audit-hero p {
-  color: rgb(255 255 255 / 72%);
+  color: #475467;
   margin: 0;
 }
 
 .eyebrow {
-  color: #bae6fd;
+  color: #0f766e;
   font-size: 12px;
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -295,7 +294,8 @@ onMounted(load);
 
 .ratio-box {
   background: #f8fafc;
-  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
   padding: 16px;
 }
 

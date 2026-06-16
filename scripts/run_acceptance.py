@@ -44,7 +44,7 @@ def check(condition: bool, label: str, detail: Any = "") -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run end-to-end acceptance checks for the ops digital employee project.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8010", help="Backend base URL, without trailing /api")
-    parser.add_argument("--skip-demo", action="store_true", help="Skip the 12-step demo workflow")
+    parser.add_argument("--skip-demo", action="store_true", help="Skip the scripted demo workflow")
     parser.add_argument("--allow-llm-not-ready", action="store_true", help="Do not fail when /api/llm/status is not ready")
     args = parser.parse_args()
 
@@ -54,17 +54,63 @@ def main() -> int:
     health = request(base_url, "GET", "/api/health")
     checks.append(check(health.get("status") == "ok", "backend health", health))
 
+    ready = request(base_url, "GET", "/api/ready")
+    checks.append(check(ready.get("status") == "ok", "backend readiness", ready))
+
     admin_token = login(base_url, "admin", "admin123")
     auditor_token = login(base_url, "auditor", "audit123")
 
     llm_status = request(base_url, "GET", "/api/llm/status", token=admin_token)
+    llm_ready = llm_status.get("ready") is True
+    ready_with_llm = request(base_url, "GET", f"/api/ready?include_llm=true&require_llm={'false' if args.allow_llm_not_ready else 'true'}")
     if args.allow_llm_not_ready:
-        checks.append({"status": "warn" if not llm_status.get("ready") else "pass", "label": "vLLM ready", "detail": llm_status})
+        checks.append({"status": "warn" if not llm_ready else "pass", "label": "vLLM ready", "detail": llm_status})
+        checks.append(
+            {
+                "status": "warn" if ready_with_llm.get("status") == "degraded" else "pass",
+                "label": "readiness with vLLM",
+                "detail": ready_with_llm,
+            }
+        )
     else:
-        checks.append(check(llm_status.get("ready") is True, "vLLM ready", llm_status))
+        checks.append(check(llm_ready, "vLLM ready", llm_status))
+        checks.append(check(ready_with_llm.get("status") == "ok", "readiness with vLLM", ready_with_llm))
 
     rag = request(base_url, "GET", "/api/rag/evaluate", token=admin_token)
     checks.append(check(rag.get("pass_rate") == 1.0, "RAG smoke tests", {"pass_rate": rag.get("pass_rate")}))
+
+    if llm_ready:
+        qa = request(
+            base_url,
+            "POST",
+            "/api/qa/ask",
+            token=admin_token,
+            payload={"question": "VPN 提示证书过期，远程办公无法连接，电话 13800138000"},
+        )
+        checks.append(
+            check(
+                qa.get("model_status") == "vllm" and qa.get("llm_used") is True,
+                "real vLLM chat completion",
+                {"conversation_id": qa.get("conversation_id"), "model_status": qa.get("model_status")},
+            )
+        )
+
+        draft = request(
+            base_url,
+            "POST",
+            "/api/issues/draft",
+            token=admin_token,
+            payload={"description": "VPN 提示证书过期，影响远程办公，电话 13800138000"},
+        )
+        checks.append(
+            check(
+                draft.get("extraction_source") == "llm" and draft.get("llm_status") == "vllm",
+                "real vLLM issue draft extraction",
+                {"extraction_source": draft.get("extraction_source"), "llm_status": draft.get("llm_status")},
+            )
+        )
+    elif args.allow_llm_not_ready:
+        checks.append({"status": "warn", "label": "real vLLM chat/draft checks", "detail": "skipped because vLLM is not ready"})
 
     sensitive = request(
         base_url,
@@ -90,10 +136,30 @@ def main() -> int:
                 demo.get("status") == "finished"
                 and demo.get("ops_window", {}).get("issue", {}).get("status") == "closed"
                 and demo.get("admin_window", {}).get("knowledge", {}).get("status") == "published",
-                "12-step closed-loop demo",
+                "scripted closed-loop demo",
                 {"demo_id": demo.get("id"), "status": demo.get("status")},
             )
         )
+        checks.append(
+            check(
+                demo.get("account_window", {}).get("approval", {}).get("status") == "approved"
+                and demo.get("account_window", {}).get("account", {}).get("status") == "active"
+                and bool(demo.get("fallback_conversation_id")),
+                "scripted account approval and knowledge-boundary demo",
+                {
+                    "account_status": demo.get("account_window", {}).get("account", {}).get("status"),
+                    "approval_status": demo.get("account_window", {}).get("approval", {}).get("status"),
+                },
+            )
+        )
+        if not args.allow_llm_not_ready:
+            checks.append(
+                check(
+                    demo.get("vpn_model_status") == "vllm",
+                    "demo used real vLLM",
+                    {"model_status": demo.get("vpn_model_status")},
+                )
+            )
 
     audit_export = request(base_url, "GET", "/api/audit/export?limit=50", token=auditor_token)
     checks.append(

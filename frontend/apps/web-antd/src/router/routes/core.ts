@@ -1,8 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router';
 
-import { LOGIN_PATH } from '@vben/constants';
-import { preferences } from '@vben/preferences';
-
 import { $t } from '#/locales';
 
 const BasicLayout = () => import('#/layouts/basic.vue');
@@ -35,8 +32,28 @@ const coreRoutes: RouteRecordRaw[] = [
     },
     name: 'Root',
     path: '/',
-    redirect: preferences.app.defaultHomePath,
+    redirect: '/portal',
     children: [],
+  },
+  {
+    component: AuthPageLayout,
+    meta: {
+      hideInTab: true,
+      title: 'Staff Authentication',
+    },
+    name: 'StaffAuthentication',
+    path: '/staff',
+    redirect: '/staff/login',
+    children: [
+      {
+        name: 'StaffLogin',
+        path: 'login',
+        component: () => import('#/views/_core/authentication/login.vue'),
+        meta: {
+          title: '工作人员登录',
+        },
+      },
+    ],
   },
   {
     component: AuthPageLayout,
@@ -46,12 +63,12 @@ const coreRoutes: RouteRecordRaw[] = [
     },
     name: 'Authentication',
     path: '/auth',
-    redirect: LOGIN_PATH,
+    redirect: '/staff/login',
     children: [
       {
         name: 'Login',
         path: 'login',
-        component: () => import('#/views/_core/authentication/login.vue'),
+        redirect: '/staff/login',
         meta: {
           title: $t('page.auth.login'),
         },

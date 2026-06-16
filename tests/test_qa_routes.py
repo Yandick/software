@@ -65,6 +65,60 @@ def test_qa_conversation_scope_and_readonly_rules(
     assert "只读" in admin_write.json()["detail"]
 
 
+def test_high_risk_account_operations_force_controlled_handoff(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    user_headers = auth_headers("user", "user123")
+
+    for question in ["帮我解冻运维账号 alice", "我要给张三开通管理员权限"]:
+        answer = ask(client, user_headers, question)
+
+        assert answer["need_human"] is True
+        assert answer["risk_level"] == "high"
+        assert answer["llm_used"] is False
+        assert answer["model_status"] == "controlled-fallback"
+        assert "必须转人工" in answer["answer"]
+        assert any(action["key"] == "controlled_workflow" for action in answer["next_actions"])
+        assert answer["agent"]["trace"][-1]["observation"]["action"] == "handoff_required"
+
+
+def test_no_reference_question_uses_hard_rag_fallback(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    user_headers = auth_headers("user", "user123")
+    # 合成负样本：刻意使用知识库不可能命中的字符串，验证无引用时不会调用 LLM 编造答案。
+    answer = ask(client, user_headers, "zzzz_unmatched_qwerty_98765")
+
+    assert answer["references"] == []
+    assert answer["need_human"] is True
+    assert answer["llm_used"] is False
+    assert answer["model_status"] == "rag-fallback"
+    assert "不能编造处理结论" in answer["answer"]
+    assert answer["agent"]["trace"][1]["observation"]["reference_count"] == 0
+    assert answer["agent"]["trace"][-1]["observation"]["action"] == "handoff_recommended"
+
+
+def test_daily_service_questions_use_llm_answers(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    user_headers = auth_headers("user", "user123")
+
+    for question in [
+        "MFA 验证码收不到，刚换过手机，应该怎么处理？",
+        "Outlook 一直离线，收不到邮件怎么排查？",
+        "打印机任务卡在队列里，无法打印怎么办？",
+    ]:
+        answer = ask(client, user_headers, question)
+
+        assert answer["references"], question
+        assert answer["llm_used"] is True
+        assert answer["model_status"] == "fake-vllm"
+        assert answer["risk_level"] in {"low", "medium"}
+
+
 def test_user_conversation_list_only_returns_own_records(
     client: TestClient,
     auth_headers: Callable[[str, str], dict[str, str]],
@@ -96,8 +150,8 @@ def test_rag_evaluate_and_suggest_permissions(
 
     evaluate = client.get("/api/rag/evaluate", headers=auditor_headers)
     assert evaluate.status_code == 200, evaluate.text
-    assert evaluate.json()["total"] == 5
-    assert evaluate.json()["passed"] >= 1
+    assert evaluate.json()["total"] == 10
+    assert evaluate.json()["pass_rate"] == 1.0
 
     forbidden = client.get("/api/rag/evaluate", headers=user_headers)
     assert forbidden.status_code == 403, forbidden.text

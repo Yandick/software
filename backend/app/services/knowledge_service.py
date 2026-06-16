@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from ..database import audit, connect, rows_to_dicts, utc_now
 from ..deps import ensure_row_exists
 from ..schemas import KnowledgeCreate, KnowledgeStatusUpdate
+from .rag_service import rag_service
 
 KNOWLEDGE_STATUSES = {"pending_review", "published", "offline"}
 KNOWLEDGE_SOURCE_TYPES = {"case", "document", "faq", "other", "policy", "runbook"}
@@ -297,6 +298,7 @@ def import_knowledge_document(
         "knowledge",
         f"{user.get('real_name','')}导入文档知识：{original_name}，生成 {len(imported_chunks)} 个候选片段，脱敏 {redacted_count} 个片段",
     )
+    rag_service.clear_cache()
     return {
         "chunk_count": len(imported_chunks),
         "chunks": imported_chunks,
@@ -361,6 +363,7 @@ def create_knowledge(data: KnowledgeCreate, user: dict[str, Any]) -> dict[str, A
         )
         item_id = int(cur.lastrowid)
     audit("knowledge_create", "knowledge", f"{user.get('real_name','')}新增知识：{payload['title']}，状态：{payload['status']}", item_id)
+    rag_service.clear_cache()
     return {
         "id": item_id,
         **payload,
@@ -389,21 +392,37 @@ def update_knowledge(item_id: int, data: KnowledgeCreate, user: dict[str, Any]) 
         if payload["status"] == "published":
             sensitive_check = ensure_knowledge_publishable(payload["title"], payload["content"], payload["tags"])
         next_version = int(row["version"] or 1) + 1
+        reviewed_by = user["id"] if payload["status"] == "published" else None
+        reviewed_at = now if payload["status"] == "published" else None
+        review_note = "编辑后直接发布" if payload["status"] == "published" else ""
         conn.execute(
             """
             update knowledge
-            set title=?,content=?,tags=?,source_type=?,status=?,version=?,reviewed_by=null,reviewed_at=null,review_note='',updated_at=?
+            set title=?,content=?,tags=?,source_type=?,status=?,version=?,reviewed_by=?,reviewed_at=?,review_note=?,updated_at=?
             where id=?
             """,
-            (payload["title"], payload["content"], payload["tags"], payload["source_type"], payload["status"], next_version, now, item_id),
+            (
+                payload["title"],
+                payload["content"],
+                payload["tags"],
+                payload["source_type"],
+                payload["status"],
+                next_version,
+                reviewed_by,
+                reviewed_at,
+                review_note,
+                now,
+                item_id,
+            ),
         )
     audit("knowledge_update", "knowledge", f"{user.get('real_name','')}更新知识：{payload['title']}，状态：{payload['status']}", item_id)
+    rag_service.clear_cache()
     return {
         "id": item_id,
         **payload,
-        "review_note": "",
-        "reviewed_at": None,
-        "reviewed_by": None,
+        "review_note": review_note,
+        "reviewed_at": reviewed_at,
+        "reviewed_by": reviewed_by,
         "sensitive_check": sensitive_summary(sensitive_check),
         "updated_at": now,
         "version": next_version,
@@ -430,4 +449,5 @@ def change_knowledge_status(item_id: int, data: KnowledgeStatusUpdate, user: dic
             (data.status, user["id"], now, review_note, now, item_id),
         )
     audit("knowledge_status", "knowledge", f"知识状态变更：{row['title']} {row['status']} -> {data.status}，审核意见：{review_note}", item_id)
+    rag_service.clear_cache()
     return {"id": item_id, "review_note": review_note, "reviewed_at": now, "reviewed_by": user["id"], "status": data.status, "updated_at": now}

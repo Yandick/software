@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import { computed, watch } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
 import { useWatermark } from '@vben/hooks';
+import { IconifyIcon } from '@vben/icons';
 import { BasicLayout, LockScreen, UserDropdown } from '@vben/layouts';
 import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
@@ -13,6 +15,7 @@ import LoginForm from '#/views/_core/authentication/login.vue';
 const userStore = useUserStore();
 const authStore = useAuthStore();
 const accessStore = useAccessStore();
+const router = useRouter();
 const { destroyWatermark, updateWatermark } = useWatermark();
 const { isDark } = usePreferences();
 const menus: Array<{ handler: () => void; icon?: string; text: string }> = [];
@@ -24,7 +27,19 @@ const userDescription = computed(() => userStore.userInfo?.username ?? '');
 const userTagText = computed(() => userStore.userInfo?.roles?.[0] ?? '');
 
 async function handleLogout() {
-  await authStore.logout(false);
+  await authStore.logout(false, '/staff/login');
+}
+
+async function goPortal() {
+  await router.push('/portal');
+}
+
+async function returnPortalHome() {
+  await authStore.logout(false, '/portal');
+}
+
+async function switchIdentity() {
+  await authStore.logout(false, '/portal?identity=user');
 }
 
 watch(
@@ -69,6 +84,22 @@ watch(
 
 <template>
   <BasicLayout @clear-preferences-and-logout="handleLogout">
+    <template #header-right-80>
+      <div class="staff-identity-actions">
+        <button type="button" @click="goPortal">
+          <IconifyIcon icon="lucide:home" />
+          <span>用户门户</span>
+        </button>
+        <button type="button" @click="returnPortalHome">
+          <IconifyIcon icon="lucide:log-out" />
+          <span>门户首页</span>
+        </button>
+        <button class="primary" type="button" @click="switchIdentity">
+          <IconifyIcon icon="lucide:shuffle" />
+          <span>切换身份</span>
+        </button>
+      </div>
+    </template>
     <template #user-dropdown>
       <UserDropdown
         :avatar
@@ -92,3 +123,46 @@ watch(
     </template>
   </BasicLayout>
 </template>
+
+<style scoped>
+.staff-identity-actions {
+  align-items: center;
+  background: #f1f5f9;
+  border: 1px solid rgb(15 23 42 / 9%);
+  border-radius: 8px;
+  display: flex;
+  gap: 4px;
+  margin-right: 10px;
+  padding: 4px;
+}
+
+.staff-identity-actions button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: #334155;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+}
+
+.staff-identity-actions button:hover {
+  background: #fff;
+  color: #0f766e;
+}
+
+.staff-identity-actions button.primary {
+  background: #0f766e;
+  color: #fff;
+}
+
+@media (max-width: 860px) {
+  .staff-identity-actions button span {
+    display: none;
+  }
+}
+</style>

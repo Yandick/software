@@ -30,3 +30,20 @@ def test_auth_rejects_bad_password(client: TestClient) -> None:
     response = client.post("/api/auth/login", json={"password": "wrong", "username": "admin"})
     assert response.status_code == 401, response.text
     assert response.json()["detail"] == "用户名或密码错误"
+
+
+def test_auth_rejects_inactive_user(client: TestClient) -> None:
+    from backend.app.database import _hash_password, connect, utc_now
+
+    with connect() as conn:
+        conn.execute(
+            """
+            insert into users(username,password_hash,real_name,role,department,status,created_at)
+            values(?,?,?,?,?,?,?)
+            """,
+            ("inactive_user", _hash_password("inactive123"), "停用用户", "user", "业务部门", "frozen", utc_now()),
+        )
+
+    response = client.post("/api/auth/login", json={"password": "inactive123", "username": "inactive_user"})
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "账号已停用，请联系管理员"

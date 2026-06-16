@@ -59,10 +59,12 @@ def create_admin_user(
     password_hash = hash_password(password)
     now = utc_now()
     with connect() as conn:
-        row = conn.execute("select id from users where username=?", (username,)).fetchone()
+        row = conn.execute("select id,role from users where username=?", (username,)).fetchone()
         if row and not replace:
             raise RuntimeError(f"user {username!r} already exists; use --replace to rotate this admin account")
         if row:
+            if row["role"] != "admin":
+                raise RuntimeError(f"user {username!r} already exists and is not an admin; refuse implicit privilege escalation")
             user_id = int(row["id"])
             conn.execute(
                 """
@@ -103,6 +105,8 @@ def main() -> int:
     try:
         settings = get_settings()
         validate_production_settings(settings)
+        if settings.is_production and args.password:
+            raise RuntimeError("do not pass production admin passwords via --password; use prompt or OPS_ADMIN_PASSWORD")
         result = create_admin_user(
             username=args.username.strip(),
             password=resolve_password(args),

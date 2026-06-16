@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+REQUIRED_FILES = [
+    ".env.example",
+    "README.md",
+    "requirements-minimal.txt",
+    "alembic.ini",
+    "backend/app/main.py",
+    "backend/migrations/versions/20260522_0001_baseline.py",
+    "frontend/package.json",
+    "frontend/pnpm-lock.yaml",
+    "scripts/start_all.sh",
+    "scripts/stop_all.sh",
+    "scripts/run_acceptance.py",
+]
+
+
+def run(command: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=ROOT_DIR, capture_output=True, text=True, timeout=timeout)
+
+
+def check(status: str, label: str, detail: Any = "") -> dict[str, Any]:
+    return {"status": status, "label": label, "detail": detail}
+
+
+def check_required_files() -> list[dict[str, Any]]:
+    result = []
+    for relative in REQUIRED_FILES:
+        path = ROOT_DIR / relative
+        result.append(check("pass" if path.exists() else "fail", relative, "present" if path.exists() else "missing"))
+    return result
+
+
+def check_runtime_config(production: bool) -> dict[str, Any]:
+    sys.path.insert(0, str(ROOT_DIR))
+    from backend.app.config import get_settings, validate_production_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    if production and not settings.is_production:
+        return check("fail", "production config", "set OPS_ENVIRONMENT=production for production package checks")
+    try:
+        validate_production_settings(settings)
+    except RuntimeError as exc:
+        return check("fail", "runtime config", str(exc))
+    return check(
+        "pass",
+        "runtime config",
+        {
+            "environment": settings.environment_name,
+            "database_url": settings.database_url,
+            "seed_demo_accounts": settings.seed_demo_accounts,
+        },
+    )
+
+
+def check_model_path() -> dict[str, Any]:
+    sys.path.insert(0, str(ROOT_DIR))
+    from backend.app.config import get_settings
+
+    settings = get_settings()
+    path = Path(settings.model_path)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    status = "pass" if path.exists() else "warn"
+    return check(status, "model path", str(path))
+
+
+def check_frontend_manifest() -> dict[str, Any]:
+    package_file = ROOT_DIR / "frontend" / "package.json"
+    data = json.loads(package_file.read_text(encoding="utf-8"))
+    engines = data.get("engines", {})
+    return check(
+        "pass",
+        "frontend manifest",
+        {"name": data.get("name"), "version": data.get("version"), "node": engines.get("node"), "pnpm": engines.get("pnpm")},
+    )
+
+
+def check_command_version(command: str, args: list[str]) -> dict[str, Any]:
+    try:
+        result = run([command, *args], timeout=20)
+    except FileNotFoundError:
+        return check("warn", command, "not found")
+    if result.returncode != 0:
+        return check("warn", command, result.stderr.strip() or result.stdout.strip())
+    return check("pass", command, result.stdout.strip())
+
+
+def run_pytest() -> dict[str, Any]:
+    result = run([sys.executable, "-m", "pytest"], timeout=300)
+    detail = (result.stdout + result.stderr).strip().splitlines()[-8:]
+    return check("pass" if result.returncode == 0 else "fail", "pytest", detail)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Offline package readiness checks for the ops digital employee project.")
+    parser.add_argument("--production", action="store_true", help="Fail unless the current OPS_* config is production-safe")
+    parser.add_argument("--run-tests", action="store_true", help="Also run python -m pytest")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only")
+    args = parser.parse_args()
+
+    os.chdir(ROOT_DIR)
+    checks: list[dict[str, Any]] = []
+    checks.extend(check_required_files())
+    checks.append(check_runtime_config(args.production))
+    checks.append(check_model_path())
+    checks.append(check_frontend_manifest())
+    checks.append(check_command_version(sys.executable, ["--version"]))
+    checks.append(check_command_version("node", ["--version"]))
+    checks.append(check_command_version("pnpm", ["--version"]))
+    if args.run_tests:
+        checks.append(run_pytest())
+
+    ok = not any(item["status"] == "fail" for item in checks)
+    payload = {"ok": ok, "checks": checks}
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        for item in checks:
+            print(f"[{item['status']}] {item['label']}: {item['detail']}")
+        print(json.dumps({"ok": ok}, ensure_ascii=False))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -28,6 +28,20 @@ def test_production_accepts_secure_jwt_and_disabled_demo_seed() -> None:
     validate_production_settings(settings)
 
 
+def test_unknown_environment_is_rejected() -> None:
+    settings = Settings(environment="prodction", jwt_secret="x" * 40, seed_demo_accounts=False)
+
+    with pytest.raises(RuntimeError, match="OPS_ENVIRONMENT"):
+        validate_production_settings(settings)
+
+
+def test_production_rejects_wildcard_cors() -> None:
+    settings = Settings(environment="production", jwt_secret="x" * 40, seed_demo_accounts=False, cors_origins="*")
+
+    with pytest.raises(RuntimeError, match="OPS_CORS_ORIGINS"):
+        validate_production_settings(settings)
+
+
 def test_init_db_can_skip_demo_account_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPS_DATABASE_URL", f"sqlite:///{tmp_path / 'no_seed.db'}")
     monkeypatch.setenv("OPS_SEED_DEMO_ACCOUNTS", "false")

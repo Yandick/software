@@ -164,6 +164,43 @@ def test_document_upload_splits_redacts_and_enters_rag_after_publish(
     assert any(item["id"] == imported["id"] and item["source_type"] == "document" for item in references)
 
 
+def test_rag_index_refreshes_after_published_knowledge_update(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    created = create_knowledge(
+        client,
+        admin_headers,
+        "pytest_rag_cache_legacy",
+        "published",
+    )
+
+    from backend.app.services.qa_service import rag_service
+
+    with_old_content = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_rag_cache_legacy", "published", "legacycachealpha 标准处理步骤。"),
+    )
+    assert with_old_content.status_code == 200, with_old_content.text
+
+    old_result = rag_service.search("legacycachealpha", limit=3)
+    assert any(item["id"] == created["id"] for item in old_result.references)
+
+    with_new_content = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_rag_cache_modern", "published", "moderncachebeta 标准处理步骤。"),
+    )
+    assert with_new_content.status_code == 200, with_new_content.text
+
+    new_result = rag_service.search("moderncachebeta", limit=3)
+    stale_result = rag_service.search("legacycachealpha", limit=3)
+    assert any(item["id"] == created["id"] for item in new_result.references)
+    assert not any(item["id"] == created["id"] for item in stale_result.references)
+
+
 def test_user_cannot_upload_knowledge_document(
     client: TestClient,
     auth_headers: Callable[[str, str], dict[str, str]],

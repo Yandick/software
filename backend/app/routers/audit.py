@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 @router.get("/logs")
 def audit_logs(
-    limit: int = Query(100, le=500),
+    limit: int = Query(100, ge=1, le=500),
     event_type: str = "",
     target_type: str = "",
     q: str = "",
@@ -29,7 +29,7 @@ def audit_logs(
 
 @router.get("/export")
 def export_audit_logs(
-    limit: int = Query(500, le=2000),
+    limit: int = Query(500, ge=1, le=2000),
     event_type: str = "",
     target_type: str = "",
     q: str = "",

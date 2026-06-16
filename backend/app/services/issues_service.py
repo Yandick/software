@@ -30,6 +30,10 @@ ISSUE_STATUSES = {
     "handled",
 }
 ISSUE_OPERATOR_STATUSES = {"accepted", "processing", "need_user_info"}
+ISSUE_ACCEPTABLE_STATUSES = {"need_user_info", "pending", "submitted"}
+ISSUE_HANDLEABLE_STATUSES = {"accepted", "need_user_info", "processing"}
+ISSUE_VISITABLE_STATUSES = {"handled", "pending_visit"}
+ALLOWED_ATTACHMENT_SCHEMES = {"http", "https"}
 ISSUE_STATUS_LABELS = {
     "accepted": "已受理",
     "closed": "已关闭",
@@ -68,6 +72,16 @@ def validate_issue_status(status: str, allowed: set[str] | None = None) -> None:
     if status not in valid:
         labels = "、".join(ISSUE_STATUS_LABELS[item] for item in sorted(valid) if item in ISSUE_STATUS_LABELS)
         raise HTTPException(status_code=400, detail=f"在线记录状态只能是：{labels}")
+
+
+def validate_attachment_url_text(attachment_url: str) -> None:
+    for value in re.split(r"[\s,，]+", attachment_url or ""):
+        value = value.strip()
+        if not value:
+            continue
+        match = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*):", value)
+        if match and match.group(1).lower() not in ALLOWED_ATTACHMENT_SCHEMES:
+            raise HTTPException(status_code=400, detail="附件链接协议不支持")
 
 
 def enrich_issue_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +167,7 @@ def extract_attachment_ids(attachment_url: str) -> list[int]:
 def validate_issue_attachment_refs(conn: Any, attachment_url: str, user: dict[str, Any]) -> None:
     if not attachment_url:
         return
+    validate_attachment_url_text(attachment_url)
     for attachment_id in extract_attachment_ids(attachment_url):
         row = conn.execute("select uploaded_by,issue_id from issue_attachments where id=?", (attachment_id,)).fetchone()
         ensure_row_exists(row, "附件")
@@ -320,6 +335,8 @@ def accept_issue(issue_id: int, user: dict[str, Any]) -> dict[str, Any]:
         ensure_row_exists(row, "在线记录")
         if row["status"] == "closed":
             raise HTTPException(status_code=400, detail="已关闭记录不能重新受理")
+        if row["status"] not in ISSUE_ACCEPTABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="只有已提交、待处理或待用户补充的记录可以受理")
         accepted_at = row["accepted_at"] or now
         conn.execute(
             "update issues set status='accepted',handled_by=?,accepted_at=?,updated_at=? where id=?",
@@ -338,6 +355,8 @@ def change_issue_status(issue_id: int, data: IssueStatusUpdate, user: dict[str, 
         ensure_row_exists(row, "在线记录")
         if row["status"] == "closed":
             raise HTTPException(status_code=400, detail="已关闭记录不能变更状态")
+        if row["status"] in ISSUE_VISITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="待回访记录请通过回访结果继续流转")
         accepted_at = row["accepted_at"] or now
         conn.execute(
             "update issues set status=?,handled_by=?,accepted_at=?,updated_at=? where id=?",
@@ -356,6 +375,8 @@ def handle_issue(issue_id: int, data: IssueHandle, user: dict[str, Any]) -> dict
         ensure_row_exists(row, "在线记录")
         if row["status"] == "closed":
             raise HTTPException(status_code=400, detail="已关闭记录不能提交处理")
+        if row["status"] not in ISSUE_HANDLEABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="只有已受理、处理中或待用户补充的记录可以提交处理")
         accepted_at = row["accepted_at"] or now
         cur = conn.execute(
             "update issues set solution=?,status='pending_visit',handled_by=?,accepted_at=?,handled_at=?,updated_at=? where id=?",
@@ -373,8 +394,12 @@ def visit_issue(issue_id: int, data: IssueVisit, user: dict[str, Any]) -> dict[s
     status = "closed" if data.resolved else "need_user_info"
     closed_at = now if data.resolved else ""
     with connect() as conn:
-        row = conn.execute("select id,title,solution from issues where id=?", (issue_id,)).fetchone()
+        row = conn.execute("select id,title,solution,status from issues where id=?", (issue_id,)).fetchone()
         ensure_row_exists(row, "在线记录")
+        if row["status"] not in ISSUE_VISITABLE_STATUSES:
+            raise HTTPException(status_code=400, detail="只有待回访记录可以回访确认")
+        if data.resolved and not row["solution"]:
+            raise HTTPException(status_code=400, detail="缺少处理结果，不能关闭记录")
         cur = conn.execute(
             "update issues set resolved=?,satisfaction_score=?,visit_result=?,status=?,visited_by=?,closed_at=?,updated_at=? where id=?",
             (int(data.resolved), data.satisfaction_score, data.visit_result, status, user["id"], closed_at, now, issue_id),

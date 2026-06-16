@@ -7,10 +7,13 @@ import sys
 
 REQUIRED = {
     "fastapi": "fastapi",
+    "python-multipart": "multipart",
     "uvicorn": "uvicorn",
     "pydantic-settings": "pydantic_settings",
     "PyJWT": "jwt",
+    "argon2-cffi": "argon2",
     "httpx": "httpx",
+    "alembic": "alembic",
     "torch": "torch",
     "transformers": "transformers",
     "vllm": "vllm",

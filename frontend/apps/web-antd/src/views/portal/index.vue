@@ -1,9 +1,9 @@
 <script lang="ts" setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { IconifyIcon } from '@vben/icons';
-import { useUserStore } from '@vben/stores';
+import { useAccessStore, useUserStore } from '@vben/stores';
 
 import { message } from 'ant-design-vue';
 
@@ -11,10 +11,12 @@ import {
   askQuestion,
   createIssue,
   draftIssue,
+  downloadIssueAttachment,
   feedbackIssue,
   getLlmStatus,
   getQaConversation,
   getStats,
+  isProtectedIssueAttachment,
   listIssues,
   listQaConversations,
   suggestQuestions,
@@ -35,6 +37,7 @@ interface ChatMessage {
   id: string;
   intentLabel?: string;
   issueDraft?: Record<string, any>;
+  llmUsed?: boolean;
   loading?: boolean;
   missingFields?: string[];
   needHuman?: boolean;
@@ -59,10 +62,15 @@ interface QaConversation {
 }
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
+const accessStore = useAccessStore();
 const userStore = useUserStore();
 
 const activeView = ref<PortalView>('chat');
+const loginPanelRef = ref<HTMLElement | null>(null);
+const portalLoginMode = ref<'staff' | 'user'>(route.query.identity === 'staff' ? 'staff' : 'user');
+const portalLoginForm = ref({ password: '', username: '' });
 const question = ref('');
 const currentQuestion = ref('');
 const conversationId = ref<number | null>(null);
@@ -102,30 +110,52 @@ let suggestTimer: ReturnType<typeof setTimeout> | undefined;
 
 const quickActions = [
   {
-    desc: '登录失败、冻结、解冻、密码与权限申请',
-    icon: 'lucide:key-round',
-    query: '账号被冻结了，怎么恢复使用？',
-    title: '账号与权限',
+    desc: '验证码、认证器、换手机和验证失败',
+    icon: 'lucide:shield-check',
+    query: 'MFA 验证码收不到，刚换过手机，应该怎么处理？',
+    title: 'MFA 验证',
   },
   {
-    desc: 'VPN、证书、远程办公和网络连通性',
+    desc: 'VPN、证书、远程办公和内网访问',
     icon: 'lucide:wifi',
-    query: 'VPN 无法连接，应该怎么排查？',
-    title: '网络与 VPN',
+    query: 'VPN 连不上或提示证书过期，我该先检查什么？',
+    title: 'VPN 远程办公',
   },
   {
-    desc: '业务系统报错、访问慢、页面异常',
+    desc: 'Outlook 离线、收不到邮件和退信',
+    icon: 'lucide:mail-warning',
+    query: 'Outlook 一直离线，收不到邮件怎么排查？',
+    title: '邮箱收发',
+  },
+  {
+    desc: '队列卡住、离线、驱动和区域打印',
+    icon: 'lucide:printer',
+    query: '打印机任务卡在队列里，无法打印怎么办？',
+    title: '打印机',
+  },
+  {
+    desc: '白屏、403、500、502、504 和超时',
     icon: 'lucide:monitor-alert',
-    query: '业务系统页面报错，怎么判断影响范围？',
+    query: '业务系统白屏或提示 500 超时，我该怎么处理？',
     title: '业务系统',
   },
   {
-    desc: '数据库连接、超时、权限和中间件异常',
-    icon: 'lucide:database',
-    query: '数据库连接失败，怎么判断影响范围？',
-    title: '数据库/中间件',
+    desc: '共享盘、网盘、路径和访问被拒绝',
+    icon: 'lucide:folder-lock',
+    query: '共享盘提示访问被拒绝，应该怎么排查？',
+    title: '共享盘',
   },
 ];
+
+const sourceTypeMeta: Record<string, string> = {
+  case: '案例',
+  document: '文档',
+  faq: 'FAQ',
+  local: '本地推荐',
+  manual: '手册',
+  policy: '流程',
+  runbook: 'Runbook',
+};
 
 const statusOptions = [
   { label: '全部', value: '' },
@@ -195,6 +225,38 @@ const visibleSuggestions = computed(() => suggestions.value.slice(0, 5));
 const visibleConversations = computed(() => conversations.value.slice(0, 6));
 const activeIssues = computed(() => issues.value.filter((item) => item.status !== 'closed').slice(0, 4));
 const latestIssues = computed(() => issues.value.slice(0, 8));
+const isAuthenticated = computed(() => !!accessStore.accessToken && !!userStore.userInfo);
+const latestAssistant = computed(() => {
+  return [...chatMessages.value].reverse().find((item) => item.role === 'assistant' && !item.loading);
+});
+const latestReferences = computed(() => (latestAssistant.value?.references || []).slice(0, 3));
+const latestQueryTerms = computed(() => latestAssistant.value?.rag?.query_terms || []);
+const loginModeMeta = computed(() => {
+  if (portalLoginMode.value === 'staff') {
+    return {
+      accountPlaceholder: 'admin / ops / auditor',
+      demo: [
+        '管理员：admin / admin123',
+        '运维人员：ops / ops123',
+        '审计员：auditor / audit123',
+      ],
+      description: '用于进入运维处理台、账号管理、知识维护和统计审计。',
+      icon: 'lucide:briefcase-business',
+      passwordPlaceholder: '请输入工作人员密码',
+      title: '工作人员登录',
+      username: 'admin',
+    };
+  }
+  return {
+    accountPlaceholder: '例如 user',
+    demo: ['普通用户：user / user123'],
+    description: '用于咨询数字员工、提交在线记录和查询本人处理进度。',
+    icon: 'lucide:circle-user-round',
+    passwordPlaceholder: '请输入用户密码',
+    title: '用户登录',
+    username: 'user',
+  };
+});
 
 async function scrollToBottom() {
   await nextTick();
@@ -232,6 +294,22 @@ function riskText(level = '') {
   return labels[level] || '未识别';
 }
 
+function sourceTypeText(value = '') {
+  return sourceTypeMeta[value] || value || '知识';
+}
+
+function answerSourceText(item: ChatMessage) {
+  if (!item.status) return '待分析';
+  return item.llmUsed ? `LLM · ${item.status}` : `规则 · ${item.status}`;
+}
+
+function answerSourceColor(item: ChatMessage) {
+  if (item.llmUsed) return 'green';
+  if (item.status === 'vllm' || item.status === 'fake-vllm') return 'green';
+  if (item.status === 'unavailable') return 'red';
+  return 'default';
+}
+
 function conversationPreview(item: QaConversation) {
   return item.last_message || item.title || `会话 #${item.id}`;
 }
@@ -240,6 +318,19 @@ function attachmentName(url = '') {
   if (!url) return '';
   const clean = url.split('?')[0] || '';
   return clean.split('/').filter(Boolean).pop() || url;
+}
+
+async function openAttachment(url = '') {
+  if (!url) return;
+  try {
+    if (isProtectedIssueAttachment(url)) {
+      await downloadIssueAttachment(url);
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch (error: any) {
+    message.error(error?.message || '附件下载失败');
+  }
 }
 
 function fillQuestion(text: string) {
@@ -303,6 +394,12 @@ async function loadIssues() {
   }
 }
 
+async function loadPortalData() {
+  await Promise.all([loadStats(), loadLlmStatus(), loadSuggestions(''), loadConversations(), loadIssues()]);
+  await nextTick();
+  inputRef.value?.focus();
+}
+
 async function loadSuggestions(keyword = question.value) {
   try {
     suggestions.value = await suggestQuestions(keyword.trim());
@@ -338,6 +435,7 @@ async function restoreConversation(id: number) {
         id: `history-${item.id}`,
         intentLabel: metadata.intent_label,
         issueDraft: metadata.issue_draft,
+        llmUsed: metadata.llm_used,
         missingFields: metadata.missing_fields || [],
         needHuman: metadata.need_human,
         nextActions: metadata.next_actions || [],
@@ -407,6 +505,7 @@ async function ask(text = question.value) {
       assistantMessage.handoffReasons = result.handoff_reasons || [];
       assistantMessage.intentLabel = result.intent_label;
       assistantMessage.issueDraft = result.issue_draft;
+      assistantMessage.llmUsed = result.llm_used;
       assistantMessage.loading = false;
       assistantMessage.missingFields = result.missing_fields || [];
       assistantMessage.needHuman = result.need_human;
@@ -539,8 +638,54 @@ async function goOps() {
   await router.push('/ops/dashboard');
 }
 
+async function focusLogin(mode: 'staff' | 'user' = portalLoginMode.value) {
+  portalLoginMode.value = mode;
+  await nextTick();
+  loginPanelRef.value?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function fillDemoAndLogin() {
+  portalLoginForm.value.username = loginModeMeta.value.username;
+  portalLoginForm.value.password =
+    portalLoginMode.value === 'staff' ? 'admin123' : 'user123';
+  await handlePortalLogin();
+}
+
+async function returnPortalHome() {
+  await authStore.logout(false, '/portal');
+}
+
+async function switchIdentity() {
+  const target = canOpenOps.value ? 'user' : 'staff';
+  await authStore.logout(false, `/portal?identity=${target}`);
+}
+
+async function handlePortalLogin() {
+  const username = portalLoginForm.value.username.trim();
+  if (!username || !portalLoginForm.value.password) {
+    message.warning('请输入账号和密码');
+    return;
+  }
+  const result = await authStore.authLogin(
+    {
+      password: portalLoginForm.value.password,
+      username,
+    },
+    async () => {},
+  );
+  const role = result.userInfo?.roles?.[0];
+  if (['admin', 'auditor', 'ops'].includes(role || '')) {
+    message.info('工作人员账号已进入管理台');
+    await router.replace('/ops/dashboard');
+    return;
+  }
+  portalLoginForm.value.password = '';
+  await router.replace('/portal');
+  await loadPortalData();
+}
+
 async function logout() {
-  await authStore.logout(false);
+  await authStore.logout(false, '/portal');
 }
 
 watch(
@@ -552,14 +697,137 @@ watch(
 );
 
 onMounted(async () => {
-  await Promise.all([loadStats(), loadLlmStatus(), loadSuggestions(''), loadConversations(), loadIssues()]);
-  await nextTick();
-  inputRef.value?.focus();
+  if (isAuthenticated.value) {
+    await loadPortalData();
+  }
 });
+
+watch(
+  isAuthenticated,
+  async (value) => {
+    if (value) {
+      await loadPortalData();
+    }
+  },
+);
+
+watch(
+  () => route.query.identity,
+  (value) => {
+    portalLoginMode.value = value === 'staff' ? 'staff' : 'user';
+  },
+);
 </script>
 
 <template>
   <div class="portal-page">
+    <section v-if="!isAuthenticated" class="portal-public">
+      <header class="public-topbar">
+        <div class="brand-block">
+          <span class="brand-mark">云</span>
+          <div>
+            <strong>云维服务门户</strong>
+            <small>企业运维数字员工</small>
+          </div>
+        </div>
+      </header>
+
+      <main class="public-shell">
+        <section class="public-intro">
+          <div class="public-kicker">
+            <IconifyIcon icon="lucide:sparkles" />
+            <span>面向业务用户的 IT 运维服务入口</span>
+          </div>
+          <h1>
+            <span>咨询问题</span>
+            <span>提交在线记录</span>
+            <span>查看处理进度</span>
+          </h1>
+          <p>
+            普通用户从这里进入服务门户，描述账号、VPN、业务系统或数据库中间件问题。
+            云维会先给出自助建议，无法解决时整理信息并转交运维人员。
+          </p>
+          <div class="public-actions">
+            <button class="primary-button large" type="button" @click="focusLogin('user')">
+              <IconifyIcon icon="lucide:log-in" />
+              <span>用户登录</span>
+            </button>
+            <button class="ghost-button large" type="button" @click="focusLogin('staff')">
+              <IconifyIcon icon="lucide:settings" />
+              <span>工作人员登录</span>
+            </button>
+          </div>
+          <div class="public-service-grid">
+            <article v-for="item in quickActions" :key="item.title" class="public-service-card">
+              <IconifyIcon :icon="item.icon" />
+              <strong>{{ item.title }}</strong>
+              <span>{{ item.desc }}</span>
+            </article>
+          </div>
+        </section>
+
+        <aside ref="loginPanelRef" class="public-login">
+          <div class="login-panel">
+            <div class="identity-segment" aria-label="选择登录身份">
+              <button
+                :class="{ active: portalLoginMode === 'user' }"
+                type="button"
+                @click="portalLoginMode = 'user'"
+              >
+                <IconifyIcon icon="lucide:user-round" />
+                <span>用户</span>
+              </button>
+              <button
+                :class="{ active: portalLoginMode === 'staff' }"
+                type="button"
+                @click="portalLoginMode = 'staff'"
+              >
+                <IconifyIcon icon="lucide:briefcase-business" />
+                <span>工作人员</span>
+              </button>
+            </div>
+            <div class="panel-heading vertical">
+              <h2>{{ loginModeMeta.title }}</h2>
+              <p>{{ loginModeMeta.description }}</p>
+            </div>
+            <a-form layout="vertical" @submit.prevent="handlePortalLogin">
+              <a-form-item :label="portalLoginMode === 'staff' ? '工作人员账号' : '用户账号'">
+                <a-input
+                  v-model:value="portalLoginForm.username"
+                  autocomplete="username"
+                  data-testid="portal-login-username"
+                  :placeholder="loginModeMeta.accountPlaceholder"
+                  @press-enter="handlePortalLogin"
+                />
+              </a-form-item>
+              <a-form-item label="密码">
+                <a-input-password
+                  v-model:value="portalLoginForm.password"
+                  autocomplete="current-password"
+                  data-testid="portal-login-password"
+                  :placeholder="loginModeMeta.passwordPlaceholder"
+                  @press-enter="handlePortalLogin"
+                />
+              </a-form-item>
+              <button class="primary-button full large" data-testid="portal-login-submit" :disabled="authStore.loginLoading" type="submit">
+                <IconifyIcon :icon="loginModeMeta.icon" />
+                <span>{{ authStore.loginLoading ? '登录中' : portalLoginMode === 'staff' ? '进入管理台' : '进入服务门户' }}</span>
+              </button>
+            </a-form>
+            <div class="demo-account">
+              <strong>本地演示用户</strong>
+              <span v-for="item in loginModeMeta.demo" :key="item">{{ item }}</span>
+              <button class="demo-login-button" type="button" @click="fillDemoAndLogin">
+                使用当前身份体验
+              </button>
+              <small>两种身份共用同一后端认证、权限和审计；入口按使用场景分离。</small>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </section>
+
+    <template v-else>
     <header class="portal-topbar">
       <div class="brand-block">
         <span class="brand-mark">云</span>
@@ -570,17 +838,27 @@ onMounted(async () => {
       </div>
 
       <nav class="portal-nav" aria-label="服务视图">
-        <button :class="['nav-button', { active: activeView === 'chat' }]" type="button" @click="activeView = 'chat'">
+        <button :class="['nav-button', { active: activeView === 'chat' }]" data-testid="portal-nav-chat" type="button" @click="activeView = 'chat'">
           <IconifyIcon icon="lucide:message-circle" />
           <span>咨询</span>
         </button>
-        <button :class="['nav-button', { active: activeView === 'issues' }]" type="button" @click="activeView = 'issues'">
+        <button :class="['nav-button', { active: activeView === 'issues' }]" data-testid="portal-nav-issues" type="button" @click="activeView = 'issues'">
           <IconifyIcon icon="lucide:clipboard-list" />
           <span>记录</span>
         </button>
       </nav>
 
       <div class="user-block">
+        <div class="identity-actions">
+          <button type="button" @click="returnPortalHome">
+            <IconifyIcon icon="lucide:home" />
+            <span>门户首页</span>
+          </button>
+          <button class="primary" type="button" @click="switchIdentity">
+            <IconifyIcon icon="lucide:shuffle" />
+            <span>切换身份</span>
+          </button>
+        </div>
         <span class="user-chip">
           <strong>{{ displayName }}</strong>
           <small>{{ roleText }}</small>
@@ -626,19 +904,21 @@ onMounted(async () => {
                 <span>新会话</span>
               </button>
             </div>
-            <button
-              v-for="item in quickActions"
-              :key="item.title"
-              class="service-tile"
-              type="button"
-              @click="fillQuestion(item.query)"
-            >
-              <IconifyIcon :icon="item.icon" />
-              <span>
-                <strong>{{ item.title }}</strong>
-                <small>{{ item.desc }}</small>
-              </span>
-            </button>
+            <div class="service-grid">
+              <button
+                v-for="item in quickActions"
+                :key="item.title"
+                class="service-tile"
+                type="button"
+                @click="fillQuestion(item.query)"
+              >
+                <IconifyIcon :icon="item.icon" />
+                <span>
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ item.desc }}</small>
+                </span>
+              </button>
+            </div>
           </section>
 
           <section class="tool-panel history-panel">
@@ -646,8 +926,10 @@ onMounted(async () => {
               <h2>最近咨询</h2>
               <a-spin v-if="conversationLoading || restoringConversation" size="small" />
             </div>
-            <a-empty v-if="!conversationLoading && !visibleConversations.length" description="暂无会话" />
-            <template v-else>
+            <div v-if="!conversationLoading && !visibleConversations.length" class="history-empty">
+              <a-empty description="暂无会话" />
+            </div>
+            <div v-else class="history-list">
               <button
                 v-for="item in visibleConversations"
                 :key="item.id"
@@ -659,7 +941,7 @@ onMounted(async () => {
                 <span>{{ conversationPreview(item) }}</span>
                 <small>{{ item.message_count || 0 }} 条 · {{ formatTime(item.updated_at) }}</small>
               </button>
-            </template>
+            </div>
           </section>
         </aside>
 
@@ -669,7 +951,7 @@ onMounted(async () => {
               <h1>和云维说明问题</h1>
               <p>{{ conversationTitle }}</p>
             </div>
-            <button class="outline-button" :disabled="creatingIssue || handoffPreparing" type="button" @click="transferToHuman()">
+            <button class="outline-button" data-testid="portal-submit-record-top" :disabled="creatingIssue || handoffPreparing" type="button" @click="transferToHuman()">
               <IconifyIcon icon="lucide:send" />
               <span>{{ creatingIssue || handoffPreparing ? '准备中' : '提交记录' }}</span>
             </button>
@@ -680,6 +962,7 @@ onMounted(async () => {
               v-for="item in chatMessages"
               :key="item.id"
               :class="['message-row', `message-${item.role}`]"
+              :data-testid="`portal-chat-message-${item.role}`"
             >
               <div class="message-avatar">
                 {{ item.role === 'user' ? '我' : item.role === 'system' ? '记' : '云' }}
@@ -693,6 +976,7 @@ onMounted(async () => {
                 <p>{{ item.text }}</p>
 
                 <div v-if="item.role === 'assistant' && !item.loading" class="message-tags">
+                  <a-tag v-if="item.status" :color="answerSourceColor(item)">{{ answerSourceText(item) }}</a-tag>
                   <a-tag v-if="item.intentLabel" color="cyan">{{ item.intentLabel }}</a-tag>
                   <a-tag v-if="item.riskLevel" :color="riskColor(item.riskLevel)">风险：{{ riskText(item.riskLevel) }}</a-tag>
                   <a-tag v-if="item.confidence !== undefined" color="geekblue">
@@ -744,9 +1028,16 @@ onMounted(async () => {
                   <article v-for="refItem in item.references" :key="refItem.id" class="reference-item">
                     <div>
                       <strong>{{ refItem.title }}</strong>
-                      <a-tag color="geekblue">{{ Math.round((refItem.score || 0) * 100) }}%</a-tag>
+                      <span>
+                        <a-tag color="blue">{{ sourceTypeText(refItem.source_type) }}</a-tag>
+                        <a-tag color="geekblue">{{ Math.round((refItem.score || 0) * 100) }}%</a-tag>
+                      </span>
                     </div>
                     <p v-if="refItem.snippet">{{ refItem.snippet }}</p>
+                    <small v-if="refItem.match_reason">{{ refItem.match_reason }}</small>
+                    <div v-if="refItem.matched_terms?.length" class="matched-terms">
+                      <a-tag v-for="term in refItem.matched_terms" :key="`${refItem.id}-${term}`" color="cyan">{{ term }}</a-tag>
+                    </div>
                   </article>
                 </div>
 
@@ -758,6 +1049,7 @@ onMounted(async () => {
                   <button
                     v-if="item.needHuman"
                     class="small-button danger"
+                    data-testid="portal-create-issue-from-message"
                     :disabled="creatingIssue || handoffPreparing"
                     type="button"
                     @click="transferToHuman(item.question || '', item.issueDraft)"
@@ -779,23 +1071,25 @@ onMounted(async () => {
                 type="button"
                 @click="fillQuestion(item.query || item.title)"
               >
-                {{ item.query || item.title }}
+                <span>{{ item.query || item.title }}</span>
+                <small>{{ sourceTypeText(item.source_type) }}</small>
               </button>
             </div>
             <textarea
               ref="inputRef"
               v-model="question"
               class="composer-input"
+              data-testid="portal-chat-input"
               placeholder="描述系统、账号、报错提示和影响范围"
               rows="3"
               @keydown.enter.exact.prevent="ask()"
             ></textarea>
             <div class="composer-actions">
-              <button class="ghost-button" :disabled="creatingIssue || handoffPreparing" type="button" @click="transferToHuman()">
+              <button class="ghost-button" data-testid="portal-submit-record" :disabled="creatingIssue || handoffPreparing" type="button" @click="transferToHuman()">
                 <IconifyIcon icon="lucide:file-plus-2" />
                 <span>{{ creatingIssue || handoffPreparing ? '准备中' : '提交在线记录' }}</span>
               </button>
-              <button class="primary-button" :disabled="loading" type="button" @click="ask()">
+              <button class="primary-button" data-testid="portal-send" :disabled="loading" type="button" @click="ask()">
                 <IconifyIcon icon="lucide:send-horizontal" />
                 <span>{{ loading ? '分析中' : '发送' }}</span>
               </button>
@@ -804,6 +1098,34 @@ onMounted(async () => {
         </section>
 
         <aside class="right-rail">
+          <section class="tool-panel rag-panel">
+            <div class="panel-heading">
+              <h2>RAG 证据</h2>
+              <a-tag :color="latestAssistant?.llmUsed ? 'green' : 'default'">
+                {{ latestAssistant ? answerSourceText(latestAssistant) : '等待提问' }}
+              </a-tag>
+            </div>
+            <div v-if="latestAssistant" class="rag-summary">
+              <div class="rag-score">
+                <span>知识置信度</span>
+                <strong>{{ Math.round(((latestAssistant.confidence || latestAssistant.rag?.confidence || 0) * 100)) }}%</strong>
+              </div>
+              <div v-if="latestQueryTerms.length" class="rag-terms">
+                <a-tag v-for="term in latestQueryTerms" :key="term" color="cyan">{{ term }}</a-tag>
+              </div>
+            </div>
+            <div v-if="latestReferences.length" class="rag-reference-list">
+              <article v-for="refItem in latestReferences" :key="`side-${refItem.id}`">
+                <strong>{{ refItem.title }}</strong>
+                <span>{{ sourceTypeText(refItem.source_type) }} · {{ Math.round((refItem.score || 0) * 100) }}%</span>
+                <p>{{ refItem.snippet || refItem.match_reason }}</p>
+              </article>
+            </div>
+            <div v-else class="rag-empty">
+              <span>先选择一个推荐问题，云维会检索私有知识库并显示引用依据。</span>
+            </div>
+          </section>
+
           <section class="tool-panel issue-panel">
             <div class="panel-heading">
               <h2>进行中的记录</h2>
@@ -823,9 +1145,9 @@ onMounted(async () => {
                 <div class="issue-meta">
                   <span>{{ item.updated_at }}</span>
                   <span>{{ item.category || 'general' }}</span>
-                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
+                  <button v-if="item.attachment_url" class="attachment-link" type="button" @click="openAttachment(item.attachment_url)">
                     附件
-                  </a>
+                  </button>
                 </div>
               </article>
             </template>
@@ -862,7 +1184,7 @@ onMounted(async () => {
 
         <a-empty v-if="!issuesLoading && latestIssues.length === 0" description="暂无在线记录" />
         <div v-else class="issue-list">
-          <article v-for="item in latestIssues" :key="item.id" class="issue-row">
+          <article v-for="item in latestIssues" :key="item.id" class="issue-row" data-testid="portal-issue-row">
             <div class="issue-main">
               <div class="issue-title">
                 <strong>#{{ item.id }} {{ item.title }}</strong>
@@ -878,10 +1200,10 @@ onMounted(async () => {
                 <span>处理人：{{ item.handled_by_name || '待分派' }}</span>
                 <span>处理耗时：{{ item.handling_minutes === null || item.handling_minutes === undefined ? '未完成' : `${item.handling_minutes} 分钟` }}</span>
               </div>
-              <a v-if="item.attachment_url" class="attachment-link mt-3" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
+              <button v-if="item.attachment_url" class="attachment-link mt-3" type="button" @click="openAttachment(item.attachment_url)">
                 <IconifyIcon icon="lucide:paperclip" />
                 <span>查看附件：{{ attachmentName(item.attachment_url) }}</span>
-              </a>
+              </button>
               <div v-if="item.solution" class="solution-box">
                 <strong>处理结果</strong>
                 <span>{{ item.solution }}</span>
@@ -913,6 +1235,7 @@ onMounted(async () => {
 
     <a-modal
       v-model:open="handoffOpen"
+      data-testid="portal-handoff-modal"
       title="确认在线记录"
       ok-text="确认提交"
       cancel-text="继续编辑"
@@ -921,11 +1244,12 @@ onMounted(async () => {
     >
       <a-form layout="vertical">
         <a-form-item label="问题标题">
-          <a-input v-model:value="handoffForm.title" placeholder="请输入问题标题" />
+          <a-input v-model:value="handoffForm.title" data-testid="portal-handoff-title" placeholder="请输入问题标题" />
         </a-form-item>
         <a-form-item label="问题描述">
           <a-textarea
             v-model:value="handoffForm.description"
+            data-testid="portal-handoff-description"
             :rows="4"
             placeholder="请确认系统、账号、错误提示和影响范围"
           />
@@ -959,6 +1283,7 @@ onMounted(async () => {
         <a-form-item label="错误日志或报错原文">
           <a-textarea
             v-model:value="handoffForm.log_excerpt"
+            data-testid="portal-handoff-log"
             :rows="3"
             placeholder="可粘贴 error、exception、timeout 等关键日志"
           />
@@ -976,10 +1301,10 @@ onMounted(async () => {
               </a-button>
             </a-upload>
           </div>
-          <a v-if="handoffForm.attachment_url" class="attachment-link mt-2" :href="handoffForm.attachment_url" rel="noopener noreferrer" target="_blank">
+          <button v-if="handoffForm.attachment_url" class="attachment-link mt-2" type="button" @click="openAttachment(handoffForm.attachment_url)">
             <IconifyIcon icon="lucide:paperclip" />
             <span>预览/下载：{{ attachmentName(handoffForm.attachment_url) }}</span>
-          </a>
+          </button>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -1005,6 +1330,7 @@ onMounted(async () => {
         </a-form-item>
       </a-form>
     </a-modal>
+    </template>
   </div>
 </template>
 
@@ -1033,6 +1359,249 @@ onMounted(async () => {
 
 button {
   font: inherit;
+}
+
+.portal-public {
+  background:
+    linear-gradient(180deg, #f8fafc 0%, #eef6f5 58%, #f5f7fa 100%);
+  min-height: 100vh;
+}
+
+.public-topbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 16px clamp(18px, 4vw, 48px);
+}
+
+.public-shell {
+  display: grid;
+  gap: clamp(24px, 5vw, 56px);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 420px);
+  margin: 0 auto;
+  max-width: 1180px;
+  min-height: calc(100vh - 96px);
+  padding: clamp(24px, 5vw, 64px) clamp(18px, 4vw, 48px) 48px;
+}
+
+.public-intro,
+.public-login {
+  min-width: 0;
+}
+
+.public-intro {
+  align-content: center;
+  display: grid;
+  gap: 22px;
+}
+
+.public-kicker {
+  align-items: center;
+  background: #ecfdf5;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  color: #115e59;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  width: fit-content;
+}
+
+.public-intro h1 {
+  color: #101828;
+  font-size: 50px;
+  line-height: 1.04;
+  max-width: 820px;
+}
+
+.public-intro h1 span {
+  display: inline;
+  white-space: nowrap;
+}
+
+.public-intro h1 span:not(:last-child)::after {
+  content: '、';
+}
+
+.public-intro p {
+  color: #475467;
+  font-size: 17px;
+  line-height: 1.8;
+  max-width: 720px;
+}
+
+.public-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.public-service-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 6px;
+  max-width: 760px;
+}
+
+.public-service-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  min-height: 136px;
+  padding: 16px;
+}
+
+.public-service-card svg {
+  color: var(--amber);
+  font-size: 24px;
+}
+
+.public-service-card strong {
+  color: #101828;
+  font-size: 16px;
+}
+
+.public-service-card span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.public-login {
+  align-content: center;
+  display: grid;
+}
+
+.login-panel {
+  background: #fff;
+  border: 1px solid #d9e2ec;
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: #111827;
+  box-shadow: 0 24px 64px rgb(15 23 42 / 12%);
+  display: flex;
+  flex-direction: column;
+  min-height: 624px;
+  padding: 24px;
+}
+
+.login-panel :deep(.ant-form-item-label > label) {
+  color: #111827;
+  font-weight: 700;
+}
+
+.login-panel :deep(.ant-input),
+.login-panel :deep(.ant-input-affix-wrapper) {
+  background: #fff;
+  border-color: #cbd5e1;
+  color: #111827;
+}
+
+.login-panel :deep(.ant-input::placeholder),
+.login-panel :deep(.ant-input-affix-wrapper input::placeholder) {
+  color: #64748b;
+}
+
+.login-panel :deep(.ant-input-affix-wrapper input) {
+  color: #111827;
+}
+
+.identity-segment,
+.identity-actions {
+  align-items: center;
+  background: #f1f5f9;
+  border: 1px solid rgb(15 23 42 / 9%);
+  border-radius: 8px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.identity-segment {
+  margin-bottom: 16px;
+}
+
+.identity-segment button,
+.identity-actions button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: #334155;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 7px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.identity-segment button {
+  flex: 1 1 0;
+  font-weight: 700;
+}
+
+.identity-segment button.active,
+.identity-actions button:hover {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 8%);
+}
+
+.identity-actions button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.panel-heading.vertical {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 58px;
+}
+
+.panel-heading.vertical p {
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.demo-account {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  min-height: 166px;
+  padding: 12px;
+}
+
+.demo-account span,
+.demo-account small {
+  color: #344054;
+  font-size: 13px;
+}
+
+.demo-account strong {
+  color: #111827;
+}
+
+.demo-login-button {
+  background: #ecfdf5;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  color: #115e59;
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 34px;
+  margin: 6px 0;
 }
 
 .portal-topbar {
@@ -1194,9 +1763,10 @@ button {
   gap: 16px;
   margin: 0 auto;
   max-width: 1640px;
+  min-height: calc(100vh - 72px);
   min-width: 0;
   overflow-x: hidden;
-  padding: 16px 24px 24px;
+  padding: 12px 24px;
   width: 100%;
 }
 
@@ -1212,8 +1782,8 @@ button {
   border: 1px solid var(--border);
   border-radius: 8px;
   gap: 12px;
-  min-height: 76px;
-  padding: 14px;
+  min-height: 64px;
+  padding: 10px 12px;
 }
 
 .stat-tile svg,
@@ -1232,7 +1802,7 @@ button {
 
 .stat-tile strong,
 .model-tile strong {
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.1;
 }
 
@@ -1250,25 +1820,31 @@ button {
 .portal-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: 300px minmax(0, 1fr) 320px;
-  min-height: calc(100vh - 180px);
+  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  height: calc(100vh - 168px);
+  min-height: 640px;
   min-width: 0;
   overflow: hidden;
 }
 
 .left-rail,
 .right-rail {
-  display: grid;
   gap: 16px;
+  min-height: 0;
   min-width: 0;
 }
 
 .left-rail {
   align-content: start;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .right-rail {
   align-content: start;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1322,8 +1898,47 @@ h2 {
 .service-panel,
 .history-panel,
 .issue-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.service-panel {
+  flex: 0 0 auto;
+}
+
+.history-panel {
+  flex: 1 1 auto;
+}
+
+.service-grid {
+  align-content: start;
   display: grid;
   gap: 8px;
+  grid-auto-rows: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.history-list {
+  align-content: start;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 8px;
+  grid-auto-rows: max-content;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
+}
+
+.history-empty {
+  align-items: center;
+  display: grid;
+  flex: 1 1 auto;
+  justify-items: center;
+  min-height: 120px;
 }
 
 .service-tile {
@@ -1332,9 +1947,10 @@ h2 {
   border: 1px solid #e2e8f0;
   color: var(--ink);
   display: flex;
-  gap: 10px;
-  min-height: 78px;
-  padding: 12px;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 108px;
+  padding: 10px;
   text-align: left;
   width: 100%;
 }
@@ -1350,8 +1966,12 @@ h2 {
 .service-tile svg {
   color: var(--amber);
   flex: 0 0 auto;
-  font-size: 22px;
-  margin-top: 2px;
+  font-size: 20px;
+}
+
+.service-tile > span {
+  min-width: 0;
+  width: 100%;
 }
 
 .service-tile strong,
@@ -1361,6 +1981,7 @@ h2 {
 .history-row small {
   display: block;
   min-width: 0;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
@@ -1373,15 +1994,45 @@ h2 {
   margin-top: 4px;
 }
 
+.service-tile strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.service-tile small {
+  display: -webkit-box;
+  font-size: 11px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .history-row {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   color: var(--ink);
   display: block;
-  min-height: 76px;
+  min-height: 68px;
   padding: 10px;
   text-align: left;
   width: 100%;
+}
+
+.history-row strong {
+  font-size: 13px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.history-row small {
+  font-size: 11px;
 }
 
 .history-row.active {
@@ -1392,7 +2043,8 @@ h2 {
 .conversation-panel {
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - 180px);
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1400,9 +2052,10 @@ h2 {
   align-items: center;
   border-bottom: 1px solid var(--border);
   display: flex;
+  flex: 0 0 auto;
   gap: 16px;
   justify-content: space-between;
-  padding: 16px 18px;
+  padding: 12px 16px;
 }
 
 .chat-titlebar p,
@@ -1430,6 +2083,16 @@ h2 {
 
 .outline-button.full {
   width: 100%;
+}
+
+.primary-button.full {
+  width: 100%;
+}
+
+.primary-button.large,
+.ghost-button.large,
+.outline-button.compact {
+  min-height: 44px;
 }
 
 .ghost-button {
@@ -1612,15 +2275,40 @@ h2 {
   justify-content: space-between;
 }
 
+.reference-item div > span {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
 .reference-item p {
   color: #475467;
   font-size: 13px;
   margin-top: 6px;
 }
 
+.reference-item small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 6px;
+}
+
+.matched-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-start !important;
+  margin-top: 8px;
+}
+
 .composer {
   background: #fff;
   border-top: 1px solid var(--border);
+  box-shadow: 0 -14px 34px rgb(15 23 42 / 8%);
+  flex: 0 0 auto;
   padding: 14px 16px;
 }
 
@@ -1636,17 +2324,38 @@ h2 {
 }
 
 .suggestion-chip {
+  align-items: center;
   background: #f0fdfa;
   border: 1px solid #99f6e4;
   color: #115e59;
+  display: inline-flex;
   flex: 1 1 220px;
+  gap: 8px;
+  justify-content: space-between;
   max-width: 100%;
   min-height: 32px;
   min-width: 0;
   overflow: hidden;
   padding: 0 10px;
+}
+
+.suggestion-chip span,
+.suggestion-chip small {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.suggestion-chip span {
+  flex: 1 1 auto;
+}
+
+.suggestion-chip small {
+  color: #0f766e;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .composer-input {
@@ -1656,7 +2365,7 @@ h2 {
   display: block;
   font-size: 15px;
   line-height: 1.6;
-  min-height: 96px;
+  min-height: 104px;
   outline: none;
   padding: 12px;
   resize: vertical;
@@ -1685,6 +2394,90 @@ h2 {
 
 .issue-card + .issue-card {
   margin-top: 8px;
+}
+
+.rag-panel {
+  flex: 0 0 auto;
+}
+
+.rag-summary {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.rag-score {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.rag-score span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rag-score strong {
+  color: var(--accent);
+  font-size: 20px;
+}
+
+.rag-terms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.rag-reference-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rag-reference-list article {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px;
+}
+
+.rag-reference-list strong,
+.rag-reference-list span,
+.rag-reference-list p {
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.rag-reference-list strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.rag-reference-list span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.rag-reference-list p,
+.rag-empty span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rag-empty {
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
 }
 
 .issue-card-head {
@@ -1732,10 +2525,15 @@ h2 {
 
 .attachment-link {
   align-items: center;
+  background: transparent;
+  border: 0;
   color: var(--accent);
+  cursor: pointer;
   display: inline-flex;
   font-size: 13px;
   gap: 6px;
+  padding: 0;
+  text-align: left;
   text-decoration: none;
 }
 
@@ -1920,6 +2718,24 @@ h2 {
 }
 
 @media (max-width: 980px) {
+  .public-shell {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .public-login {
+    align-content: start;
+  }
+
+  .public-intro h1 {
+    font-size: 44px;
+    line-height: 1.1;
+  }
+
+  .login-panel {
+    min-height: auto;
+  }
+
   .portal-topbar {
     grid-template-columns: 1fr;
     position: static;
@@ -1934,6 +2750,15 @@ h2 {
     justify-content: space-between;
   }
 
+  .identity-actions {
+    order: 3;
+    width: 100%;
+  }
+
+  .identity-actions button {
+    flex: 1 1 0;
+  }
+
   .status-band {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1944,14 +2769,26 @@ h2 {
 
   .portal-grid {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
   }
 
   .conversation-panel {
-    min-height: 720px;
+    height: min(720px, calc(100vh - 180px));
+    min-height: 560px;
   }
 
   .left-rail {
+    grid-template-rows: none;
     order: 2;
+    overflow: visible;
+  }
+
+  .history-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .issue-row {
@@ -1960,13 +2797,36 @@ h2 {
 }
 
 @media (max-width: 640px) {
+  .public-topbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .public-service-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .public-intro h1 {
+    font-size: 34px;
+    line-height: 1.12;
+  }
+
   .portal-content,
   .portal-topbar {
     padding-left: 12px;
     padding-right: 12px;
   }
 
+  .identity-actions button span {
+    display: none;
+  }
+
   .status-band {
+    grid-template-columns: 1fr;
+  }
+
+  .service-grid {
     grid-template-columns: 1fr;
   }
 

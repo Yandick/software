@@ -753,7 +753,7 @@ onMounted(async () => {
 .chat-sidebar,
 .chat-main {
   border: 1px solid rgb(15 118 110 / 14%);
-  border-radius: 22px;
+  border-radius: 8px;
   box-shadow: 0 24px 70px rgb(15 23 42 / 10%);
 }
 
@@ -764,7 +764,7 @@ onMounted(async () => {
   flex-direction: column;
   gap: 14px;
   height: calc(100vh - 136px);
-  min-height: 720px;
+  min-height: 640px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 16px;
@@ -782,7 +782,7 @@ onMounted(async () => {
 .suggest-card {
   background: rgb(255 255 255 / 88%);
   border: 1px solid rgb(15 23 42 / 7%);
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: 0 14px 34px rgb(15 23 42 / 6%);
   padding: 16px;
 }
@@ -811,7 +811,7 @@ onMounted(async () => {
 .message-avatar {
   align-items: center;
   background: linear-gradient(135deg, #f59e0b, #14b8a6);
-  border-radius: 18px;
+  border-radius: 8px;
   color: #fff;
   display: flex;
   flex: 0 0 auto;
@@ -849,14 +849,14 @@ onMounted(async () => {
   color: #99f6e4;
   font-size: 12px;
   font-weight: 800;
-  letter-spacing: 0.16em;
+  letter-spacing: 0;
 }
 
 .status-row {
   align-items: center;
   background: #f8fafc;
   border: 1px solid rgb(15 23 42 / 6%);
-  border-radius: 12px;
+  border-radius: 8px;
   display: flex;
   justify-content: space-between;
   margin-top: 8px;
@@ -872,7 +872,7 @@ onMounted(async () => {
 .metrics-grid div {
   background: linear-gradient(180deg, #fff, #f8fafc);
   border: 1px solid rgb(15 23 42 / 7%);
-  border-radius: 14px;
+  border-radius: 8px;
   box-shadow: 0 12px 28px rgb(15 23 42 / 5%);
   padding: 12px;
 }
@@ -897,7 +897,7 @@ onMounted(async () => {
 .quick-button {
   background: linear-gradient(180deg, #fff, #f8fafc);
   border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   display: block;
   margin-top: 8px;
@@ -950,7 +950,7 @@ onMounted(async () => {
 .empty-session {
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
-  border-radius: 12px;
+  border-radius: 8px;
   color: var(--muted);
   font-size: 12px;
   padding: 12px;
@@ -963,7 +963,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 136px);
-  min-height: 720px;
+  min-height: 640px;
   min-width: 0;
   overflow: hidden;
 }
@@ -1021,7 +1021,7 @@ onMounted(async () => {
 .message-bubble {
   background: rgb(255 255 255 / 90%);
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: 0 14px 34px rgb(15 23 42 / 7%);
   max-width: min(780px, 86%);
   min-width: 0;
@@ -1052,7 +1052,7 @@ onMounted(async () => {
 .reference-box {
   background: rgb(255 255 255 / 70%);
   border: 1px solid rgb(15 23 42 / 7%);
-  border-radius: 12px;
+  border-radius: 8px;
   display: grid;
   gap: 8px;
   margin-top: 12px;
@@ -1062,7 +1062,7 @@ onMounted(async () => {
 .employee-decision {
   background: linear-gradient(135deg, rgb(240 253 250 / 86%), rgb(255 251 235 / 76%));
   border: 1px solid rgb(20 184 166 / 20%);
-  border-radius: 14px;
+  border-radius: 8px;
   color: #334155;
   margin-top: 12px;
   padding: 12px;
@@ -1113,7 +1113,7 @@ onMounted(async () => {
   align-items: start;
   background: rgb(255 255 255 / 74%);
   border: 1px solid #ccfbf1;
-  border-radius: 10px;
+  border-radius: 8px;
   display: grid;
   gap: 3px;
   grid-template-columns: minmax(56px, 0.6fr) minmax(96px, 1fr) minmax(0, 2.4fr);
@@ -1148,7 +1148,7 @@ onMounted(async () => {
 .clarify-button {
   background: #fff;
   border: 1px solid #bae6fd;
-  border-radius: 999px;
+  border-radius: 8px;
   color: #0369a1;
   cursor: pointer;
   font-size: 12px;
@@ -1182,7 +1182,7 @@ onMounted(async () => {
 .reference-item {
   background: rgb(248 250 252 / 78%);
   border: 1px solid #dbeafe;
-  border-radius: 12px;
+  border-radius: 8px;
   padding: 9px 10px;
 }
 
@@ -1268,7 +1268,7 @@ onMounted(async () => {
 .composer-input {
   background: #fff;
   border: 2px solid #0f766e;
-  border-radius: 14px;
+  border-radius: 8px;
   box-shadow:
     0 0 0 5px rgb(20 184 166 / 13%),
     inset 0 1px 0 rgb(15 23 42 / 5%);
@@ -1303,7 +1303,7 @@ onMounted(async () => {
 .primary-send,
 .secondary-send {
   border: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   cursor: pointer;
   font-weight: 700;
 }
@@ -1730,7 +1730,7 @@ onMounted(async () => {
 
   .chat-main {
     height: auto;
-    min-height: 780px;
+    min-height: 680px;
   }
 }
 

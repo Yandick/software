@@ -27,6 +27,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+settings = get_settings()
+
 app = FastAPI(title="运维数字员工系统", lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(audit_router)
@@ -39,7 +41,7 @@ app.include_router(system_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

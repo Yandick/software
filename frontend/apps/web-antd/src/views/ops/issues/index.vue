@@ -11,8 +11,10 @@ import {
   changeIssueStatus,
   createIssue,
   createIssueKnowledgeCandidate,
+  downloadIssueAttachment,
   feedbackIssue,
   handleIssue,
+  isProtectedIssueAttachment,
   listIssues,
   uploadIssueAttachment,
   visitIssue,
@@ -265,15 +267,28 @@ function attachmentName(url = '') {
   return clean.split('/').filter(Boolean).pop() || url;
 }
 
+async function openAttachment(url = '') {
+  if (!url) return;
+  try {
+    if (isProtectedIssueAttachment(url)) {
+      await downloadIssueAttachment(url);
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch (error: any) {
+    message.error(error?.message || '附件下载失败');
+  }
+}
+
 onMounted(load);
 </script>
 
 <template>
   <div class="issue-page p-5">
-    <div class="mb-5 rounded-3xl bg-slate-950 p-6 text-white">
-      <div class="text-sm font-semibold uppercase tracking-[0.2em] text-cyan-200">Incident Desk</div>
-      <h1 class="mt-3 text-3xl font-semibold">在线记录与人工处理台</h1>
-      <p class="mt-3 max-w-3xl text-white/70">
+    <div class="ops-hero mb-5">
+      <div class="ops-kicker">Incident Desk</div>
+      <h1>在线记录与人工处理台</h1>
+      <p>
         用户提交无法自助解决的问题；运维人员处理、回访，确认解决后自动沉淀为知识案例。
       </p>
       <div class="ops-hero-metrics">
@@ -346,17 +361,18 @@ onMounted(load);
             v-model:value="q"
             allow-clear
             class="min-w-[260px]"
+            data-testid="ops-issue-search"
             placeholder="查询我的记录：标题、描述、分类、影响范围"
             @search="load"
           />
         </div>
-        <a-button :loading="loading" @click="load">刷新</a-button>
+        <a-button data-testid="ops-issue-refresh" :loading="loading" @click="load">刷新</a-button>
       </div>
 
       <a-empty v-if="!loading && rows.length === 0" description="暂无在线记录" />
       <a-list v-else :data-source="rows" :loading="loading" item-layout="vertical">
         <template #renderItem="{ item }">
-          <a-list-item class="issue-item">
+          <a-list-item class="issue-item" data-testid="ops-issue-row">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <section class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-2">
@@ -378,9 +394,9 @@ onMounted(load);
                   <span>处理人：{{ item.handled_by_name || '待分派' }}</span>
                   <span>受理耗时：{{ item.response_minutes === null || item.response_minutes === undefined ? '未受理' : `${item.response_minutes} 分钟` }}</span>
                   <span>处理耗时：{{ item.handling_minutes === null || item.handling_minutes === undefined ? '未完成' : `${item.handling_minutes} 分钟` }}</span>
-                  <a v-if="item.attachment_url" class="attachment-link" :href="item.attachment_url" rel="noopener noreferrer" target="_blank">
+                  <button v-if="item.attachment_url" class="attachment-link" type="button" @click="openAttachment(item.attachment_url)">
                     附件/截图：{{ attachmentName(item.attachment_url) }}
-                  </a>
+                  </button>
                   <span v-if="item.user_satisfaction_score">用户评价：{{ item.user_satisfaction_score }} 分</span>
                   <span v-if="item.user_feedback">评价意见：{{ item.user_feedback }}</span>
                 </div>
@@ -394,7 +410,7 @@ onMounted(load);
                 <a-alert v-if="item.solution" class="mt-4" type="success" show-icon :message="`处理结果：${item.solution}`" />
               </section>
 
-              <aside class="w-full rounded-2xl bg-slate-50 p-4 lg:w-[420px]">
+              <aside class="issue-progress-panel w-full p-4 lg:w-[420px]">
                 <div class="mb-3 font-medium">处理进度</div>
                 <a-timeline v-if="item.events?.length">
                   <a-timeline-item v-for="event in item.events" :key="`${item.id}-${event.created_at}-${event.event_type}`">
@@ -410,6 +426,7 @@ onMounted(load);
                   <div class="mb-3 flex flex-wrap gap-2">
                     <a-button
                       v-if="item.status === 'submitted' || item.status === 'pending'"
+                      data-testid="ops-issue-accept"
                       :loading="accepting[item.id]"
                       size="small"
                       type="primary"
@@ -430,6 +447,7 @@ onMounted(load);
                   </div>
                   <a-button
                     class="mb-3"
+                    data-testid="ops-issue-assist"
                     :loading="assisting[item.id]"
                     size="small"
                     @click="loadAssist(item.id)"
@@ -464,7 +482,7 @@ onMounted(load);
                       </div>
                     </div>
                     <a-alert class="mt-3" type="success" show-icon :message="`回访话术：${assistMap[item.id].visit_script}`" />
-                    <div v-if="assistMap[item.id].knowledge_candidate" class="mt-3 rounded-xl bg-amber-50 p-3">
+                    <div v-if="assistMap[item.id].knowledge_candidate" class="knowledge-candidate-box mt-3 p-3">
                       <div class="text-sm font-medium text-amber-800">知识候选草稿</div>
                       <div class="mt-1 text-sm text-amber-700">{{ assistMap[item.id].knowledge_candidate.title }}</div>
                       <a-button
@@ -480,14 +498,15 @@ onMounted(load);
                   </div>
                   <a-textarea
                     v-model:value="solution[item.id]"
+                    data-testid="ops-issue-solution"
                     :rows="3"
                     placeholder="填写处理过程、根因、处理结果和注意事项"
                   />
                   <div class="mt-3 flex flex-wrap gap-2">
-                    <a-button :loading="handling[item.id]" size="small" type="primary" @click="handle(item.id)">
+                    <a-button data-testid="ops-issue-submit-handle" :loading="handling[item.id]" size="small" type="primary" @click="handle(item.id)">
                       提交处理
                     </a-button>
-                    <a-button v-if="canVisit(item)" size="small" @click="confirmVisit(item.id, true)">回访已解决</a-button>
+                    <a-button v-if="canVisit(item)" data-testid="ops-issue-visit-resolved" size="small" @click="confirmVisit(item.id, true)">回访已解决</a-button>
                     <a-button v-if="canVisit(item)" size="small" danger @click="confirmVisit(item.id, false)">回访未解决</a-button>
                   </div>
                 </div>
@@ -536,12 +555,12 @@ onMounted(load);
 
 <style scoped>
 .issue-page :deep(.ant-card) {
-  border-radius: 20px;
+  border-radius: 8px;
 }
 
 .issue-item {
   border: 1px solid #e2e8f0;
-  border-radius: 18px;
+  border-radius: 8px;
   margin-bottom: 14px;
   padding: 18px !important;
 }
@@ -549,13 +568,30 @@ onMounted(load);
 .assist-box {
   background: #fff;
   border: 1px solid #bae6fd;
-  border-radius: 16px;
+  border-radius: 8px;
   padding: 12px;
 }
 
+.issue-progress-panel {
+  background: #f8fafc;
+  border-radius: 8px;
+}
+
+.knowledge-candidate-box {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+}
+
 .attachment-link {
+  background: transparent;
+  border: 0;
   color: #0f766e;
+  cursor: pointer;
+  font: inherit;
   overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
 }
 
 .assist-list {
@@ -569,7 +605,7 @@ onMounted(load);
 
 .knowledge-ref {
   background: #f8fafc;
-  border-radius: 12px;
+  border-radius: 8px;
   margin-top: 8px;
   padding: 10px;
 }

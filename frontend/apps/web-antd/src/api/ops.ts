@@ -1,3 +1,5 @@
+import { useAccessStore } from '@vben/stores';
+
 import { requestClient } from '#/api/request';
 
 export function askQuestion(question: string, enableThinking = false, conversationId?: number | null) {
@@ -42,6 +44,49 @@ export function uploadIssueAttachment(file: File) {
   return requestClient.post<any>('/issues/attachments', data, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
+}
+
+export function isProtectedIssueAttachment(url = '') {
+  return /^(?:https?:\/\/[^/]+)?\/api\/issues\/attachments\/\d+\/download(?:[?#].*)?$/.test(url);
+}
+
+function filenameFromDisposition(disposition = '') {
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+  const asciiMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return asciiMatch?.[1] ? decodeURIComponent(asciiMatch[1]) : '';
+}
+
+export async function downloadIssueAttachment(url: string) {
+  const accessStore = useAccessStore();
+  const response = await fetch(url, {
+    headers: accessStore.accessToken
+      ? { Authorization: `Bearer ${accessStore.accessToken}` }
+      : {},
+  });
+  if (!response.ok) {
+    let detail = '';
+    try {
+      detail = (await response.json())?.detail || '';
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail || `附件下载失败：HTTP ${response.status}`);
+  }
+  const blob = await response.blob();
+  const filename =
+    filenameFromDisposition(response.headers.get('content-disposition') || '') ||
+    decodeURIComponent(url.split('?')[0]?.split('/').pop() || 'attachment');
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
 export function acceptIssue(id: number) {

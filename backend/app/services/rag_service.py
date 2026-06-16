@@ -6,6 +6,7 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from dataclasses import field
+from threading import RLock
 from typing import Any
 
 from ..database import connect, rows_to_dicts
@@ -14,8 +15,21 @@ HIGH_RISK_PATTERNS = [
     "删除", "清空", "生产", "提权", "权限提升", "数据库重启", "重启数据库", "泄露", "攻击", "勒索", "批量", "root", "sudo",
 ]
 
+CONTROLLED_OPERATION_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"(冻结|解冻|停用|启用|注销|清理|删除).{0,12}(运维)?账号",
+        r"(运维)?账号.{0,12}(冻结|解冻|停用|启用|注销|清理|删除)",
+        r"(开通|申请|修改|变更|扩大|提升|授予|增加).{0,12}(管理员|root|sudo|高权限|权限|角色)",
+        r"(管理员|root|sudo|高权限).{0,8}(权限|账号|角色)",
+        r"权限.{0,8}(变更|提升|扩大|开通|修改|授权)",
+    ]
+]
+
 DOMAIN_ALIASES = {
     "vpn": ["vpn", "VPN", "远程办公", "远程接入", "证书过期", "客户端证书"],
+    "mfa": ["mfa", "MFA", "2fa", "2FA", "多因素认证", "双因素认证", "二次验证", "认证器", "Authenticator"],
+    "验证码": ["验证码", "短信验证码", "邮箱验证码", "手机验证", "验证失败", "收不到验证码"],
     "证书": ["证书", "证书过期", "客户端证书", "证书链"],
     "账号": ["账号", "账户", "用户名", "登录名", "工号"],
     "冻结": ["冻结", "锁定", "解冻", "账号锁定", "临时锁定"],
@@ -23,18 +37,39 @@ DOMAIN_ALIASES = {
     "权限": ["权限", "授权", "角色", "权限申请", "权限变更"],
     "审批": ["审批", "审核", "申请", "受控流程"],
     "邮箱": ["邮箱", "邮件", "收发", "客户端授权码"],
-    "网络": ["网络", "链路", "网关", "DNS", "代理"],
+    "outlook": ["outlook", "Outlook", "邮件客户端", "客户端离线", "脱机工作", "收不到邮件", "发不出邮件"],
+    "网络": ["网络", "链路", "网关", "DNS", "代理", "无线", "有线", "联网"],
+    "wifi": ["wifi", "wi-fi", "Wi-Fi", "WIFI", "无线网", "无线网络", "公司 Wi-Fi", "公司wifi"],
     "数据库": ["数据库", "DB", "SQL", "连接串", "连接池"],
     "连接失败": ["连接失败", "无法连接", "连不上", "连接异常"],
     "磁盘": ["磁盘", "空间", "挂载点", "日志清理"],
     "性能": ["性能", "系统慢", "访问慢", "超时", "响应时间"],
+    "业务系统": ["业务系统", "应用系统", "页面白屏", "白屏", "403", "500", "502", "504", "网关错误"],
+    "打印机": ["打印机", "打印", "打印失败", "打印队列", "卡在队列", "驱动", "耗材"],
+    "共享盘": ["共享盘", "共享文件夹", "部门文件夹", "网盘", "文件夹", "访问被拒绝"],
+    "浏览器": ["浏览器", "缓存", "cookie", "Cookie", "无痕窗口", "证书警告", "登录循环"],
+    "软件安装": ["软件安装", "软件中心", "客户端更新", "安装失败", "升级失败", "插件"],
+    "会议": ["会议", "音视频", "麦克风", "摄像头", "投屏", "会议室"],
+    "文件恢复": ["误删", "文件恢复", "数据恢复", "回收站", "历史版本", "快照"],
     "转人工": ["转人工", "在线记录", "工单", "人工处理", "申告"],
     "知识库": ["知识库", "FAQ", "处理案例", "知识候选", "沉淀"],
 }
 
+DAILY_SUGGESTION_QUERIES = [
+    "MFA 验证码收不到怎么办？",
+    "VPN 连不上或证书过期怎么处理？",
+    "Outlook 一直离线收不到邮件怎么排查？",
+    "打印机任务卡在队列里怎么办？",
+    "公司 Wi-Fi 或有线网络无法联网怎么办？",
+    "业务系统白屏或 500 超时怎么处理？",
+    "共享盘提示访问被拒绝怎么处理？",
+    "软件中心安装失败怎么处理？",
+]
+
 STOP_TERMS = {
     "以及", "一个", "可以", "如果", "应该", "怎么", "如何", "处理", "问题", "用户", "系统",
     "确认", "需要", "信息", "记录", "进行", "当前", "相关", "时候", "什么",
+    "答辩", "类似", "项目", "资料",
 }
 
 CHUNK_MAX_CHARS = 260
@@ -61,32 +96,86 @@ class RagService:
     changing the API contract used by the digital employee.
     """
 
-    def _load_knowledge(self) -> list[dict[str, Any]]:
-        with connect() as conn:
-            rows = conn.execute(
-                """
-                select id,title,content,tags,source_type,status,version,reviewed_by,
-                       reviewed_at,review_note,created_at,updated_at
-                from knowledge
-                where status='published'
-                order by updated_at desc,id desc
-                """
-            ).fetchall()
+    def __init__(self) -> None:
+        self._cache_lock = RLock()
+        self._cache_key: tuple[Any, ...] | None = None
+        self._cache_items: list[dict[str, Any]] = []
+        self._cache_chunks: list[dict[str, Any]] = []
+        self._cache_idf: dict[str, float] = {}
+
+    def clear_cache(self) -> None:
+        with self._cache_lock:
+            self._cache_key = None
+            self._cache_items = []
+            self._cache_chunks = []
+            self._cache_idf = {}
+
+    def _knowledge_signature(self, conn: Any) -> tuple[Any, ...]:
+        db_row = conn.execute("pragma database_list").fetchone()
+        db_file = db_row["file"] if db_row and "file" in db_row.keys() else ""
+        row = conn.execute(
+            """
+            select
+              count(*) as row_count,
+              coalesce(max(id), 0) as max_id,
+              coalesce(max(updated_at), '') as max_updated_at,
+              coalesce(sum(length(title) + length(content) + length(tags) + length(status)), 0) as content_size
+            from knowledge
+            where status='published'
+            """
+        ).fetchone()
+        return (
+            db_file,
+            int(row["row_count"] or 0),
+            int(row["max_id"] or 0),
+            str(row["max_updated_at"] or ""),
+            int(row["content_size"] or 0),
+        )
+
+    def _query_published_knowledge(self, conn: Any) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            select id,title,content,tags,source_type,status,version,reviewed_by,
+                   reviewed_at,review_note,created_at,updated_at
+            from knowledge
+            where status='published'
+            order by updated_at desc,id desc
+            """
+        ).fetchall()
         return rows_to_dicts(rows)
 
+    def _get_index(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
+        with connect() as conn:
+            cache_key = self._knowledge_signature(conn)
+            with self._cache_lock:
+                if self._cache_key == cache_key:
+                    return self._cache_items, self._cache_chunks, self._cache_idf
+            items = self._query_published_knowledge(conn)
+
+        chunks = self._build_chunks(items)
+        idf = self._build_idf(chunks)
+        with self._cache_lock:
+            self._cache_key = cache_key
+            self._cache_items = items
+            self._cache_chunks = chunks
+            self._cache_idf = idf
+        return items, chunks, idf
+
+    def _load_knowledge(self) -> list[dict[str, Any]]:
+        items, _, _ = self._get_index()
+        return items
+
     def search(self, question: str, limit: int = 4) -> RetrievalResult:
-        items = self._load_knowledge()
+        items, chunks, idf = self._get_index()
         high_risk = self.is_high_risk(question)
         if not items:
             return RetrievalResult([], 0.0, high_risk)
 
-        chunks = self._build_chunks(items)
         query_terms = self._tokenize(question)
         display_query_terms = self._display_terms(question, query_terms)
         if not query_terms:
             return RetrievalResult([], 0.0, high_risk, display_query_terms)
 
-        idf = self._build_idf(chunks)
         scored: list[dict[str, Any]] = []
         for chunk in chunks:
             score, detail = self._score_chunk(question, query_terms, chunk, idf)
@@ -133,7 +222,10 @@ class RagService:
         items = self._load_knowledge()
         if not items:
             return []
-        matched = self.search(keyword, limit=limit).references if keyword.strip() else items[:limit]
+        if keyword.strip():
+            matched = self.search(keyword, limit=limit).references
+        else:
+            matched = self._daily_suggestion_items(limit)
 
         suggestions: list[dict[str, Any]] = []
         for item in matched[:limit]:
@@ -154,9 +246,39 @@ class RagService:
 
     def _build_suggest_query(self, item: dict[str, Any]) -> str:
         title = str(item.get("title", "")).strip()
+        if title.startswith("用户自助："):
+            title = title.removeprefix("用户自助：").strip()
+            return f"{title}时我该先检查什么？"
         if title.endswith(("？", "?", "怎么处理", "如何处理")):
             return title
         return f"{title}怎么处理？"
+
+    def _daily_suggestion_items(self, limit: int) -> list[dict[str, Any]]:
+        suggestions: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for query in DAILY_SUGGESTION_QUERIES:
+            for item in self.search(query, limit=2).references:
+                item_id = int(item["id"])
+                if item_id in seen:
+                    continue
+                seen.add(item_id)
+                suggestions.append(item)
+                break
+            if len(suggestions) >= limit:
+                return suggestions
+
+        for item in self._load_knowledge():
+            item_id = int(item["id"])
+            if item_id in seen:
+                continue
+            tags = str(item.get("tags", ""))
+            if "用户自助" not in tags and item.get("source_type") != "faq":
+                continue
+            seen.add(item_id)
+            suggestions.append(item)
+            if len(suggestions) >= limit:
+                break
+        return suggestions
 
     def _build_chunks(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
@@ -349,4 +471,10 @@ class RagService:
 
     def is_high_risk(self, question: str) -> bool:
         normalized = self._normalize(question)
-        return any(self._normalize(pattern) in normalized for pattern in HIGH_RISK_PATTERNS)
+        compact = re.sub(r"\s+", "", normalized)
+        return any(self._normalize(pattern) in normalized for pattern in HIGH_RISK_PATTERNS) or any(
+            pattern.search(compact) for pattern in CONTROLLED_OPERATION_PATTERNS
+        )
+
+
+rag_service = RagService()

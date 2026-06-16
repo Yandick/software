@@ -151,3 +151,39 @@ def test_user_cannot_process_or_feedback_other_issue(
     )
     assert feedback.status_code == 403, feedback.text
     assert "只能评价自己提交的在线记录" in feedback.json()["detail"]
+
+
+def test_issue_rejects_dangerous_attachment_url(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    user_headers = auth_headers("user", "user123")
+
+    for attachment_url in ["javascript:alert(1)", "file:///etc/passwd"]:
+        response = client.post(
+            "/api/issues",
+            headers=user_headers,
+            json=issue_payload("pytest_dangerous_attachment", attachment_url),
+        )
+
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"] == "附件链接协议不支持"
+
+
+def test_issue_status_machine_requires_handle_before_visit(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    user_headers = auth_headers("user", "user123")
+    ops_headers = auth_headers("ops", "ops123")
+    issue_id = create_issue(client, user_headers, "pytest_issue_status_machine")
+
+    direct_handle = client.post(f"/api/issues/{issue_id}/handle", headers=ops_headers, json={"solution": "未受理直接处理"})
+    assert direct_handle.status_code == 400, direct_handle.text
+
+    direct_visit = client.post(
+        f"/api/issues/{issue_id}/visit",
+        headers=ops_headers,
+        json={"resolved": True, "satisfaction_score": 5, "visit_result": "未处理直接回访"},
+    )
+    assert direct_visit.status_code == 400, direct_visit.text

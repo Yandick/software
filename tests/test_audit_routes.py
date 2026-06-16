@@ -25,6 +25,21 @@ def test_auditor_can_read_and_export_audit_logs(
     assert "log_type,id,event_type" in export.json()["content"]
 
 
+def test_audit_export_sanitizes_csv_formula_prefix(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    from backend.app.database import audit
+
+    audit("manual_test", "pytest", "\t=cmd")
+    auditor_headers = auth_headers("auditor", "audit123")
+
+    export = client.get("/api/audit/export", headers=auditor_headers, params={"q": "cmd"})
+
+    assert export.status_code == 200, export.text
+    assert "'\t=cmd" in export.json()["content"]
+
+
 def test_audit_stats_keep_user_scope(
     client: TestClient,
     auth_headers: Callable[[str, str], dict[str, str]],
@@ -48,3 +63,16 @@ def test_ops_cannot_read_audit_logs(
     ops_headers = auth_headers("ops", "ops123")
     response = client.get("/api/audit/logs", headers=ops_headers)
     assert response.status_code == 403, response.text
+
+
+def test_audit_limit_rejects_negative_values(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    auditor_headers = auth_headers("auditor", "audit123")
+
+    logs = client.get("/api/audit/logs", headers=auditor_headers, params={"limit": -1})
+    assert logs.status_code == 422, logs.text
+
+    export = client.get("/api/audit/export", headers=auditor_headers, params={"limit": -1})
+    assert export.status_code == 422, export.text

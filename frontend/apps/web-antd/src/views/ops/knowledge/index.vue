@@ -297,10 +297,10 @@ onMounted(load);
 
 <template>
   <div class="knowledge-page p-5">
-    <div class="mb-5 rounded-3xl bg-slate-950 p-6 text-white">
-      <div class="text-sm font-semibold uppercase tracking-[0.2em] text-amber-200">Knowledge Base</div>
-      <h1 class="mt-3 text-3xl font-semibold">知识库维护与审核</h1>
-      <p class="mt-3 max-w-3xl text-white/70">
+    <div class="ops-hero mb-5">
+      <div class="ops-kicker">Knowledge Base</div>
+      <h1>知识库维护与审核</h1>
+      <p>
         常见问答、操作规程、制度流程和已解决案例先作为候选知识沉淀，审核发布后进入数字员工检索范围。
       </p>
       <div class="ops-hero-metrics">
@@ -497,6 +497,6 @@ onMounted(load);
 
 <style scoped>
 .knowledge-page :deep(.ant-card) {
-  border-radius: 20px;
+  border-radius: 8px;
 }
 </style>

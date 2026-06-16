@@ -22,10 +22,14 @@ const timelineScrollRef = ref<HTMLElement | null>(null);
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
 
 const stepLabels: Record<string, string> = {
+  account_approve: '账号审批',
+  account_question: '账号请求',
+  account_request: '提交审批',
   agent_handoff: '人工协同',
   agent_review: '知识研判',
   audit_summary: '审计汇总',
   create_issue: '创建在线记录',
+  fallback_question: '边界问答',
   knowledge_review: '知识审核',
   ops_accept: '运维接单',
   ops_assist: '处置建议',
@@ -37,10 +41,14 @@ const stepLabels: Record<string, string> = {
 };
 
 const stepHints: Record<string, string> = {
+  account_approve: '管理员审批账号解冻，审批通过后账号状态才会真实变更并写入审计。',
+  account_question: '用户提出账号解冻诉求，数字员工识别为高风险受控操作。',
+  account_request: '运维人员不直接解冻账号，只创建审批单并等待管理员确认。',
   agent_handoff: '输出人工协同交接摘要，明确风险依据、已识别字段和待补充信息。',
   agent_review: '核对知识命中、置信度和风险等级，判断是否进入人工处理。',
   audit_summary: '汇总本次演示的审计日志、问答记录和闭环指标。',
   create_issue: '使用数字员工抽取字段生成在线记录，进入人工处理队列。',
+  fallback_question: '演示知识边界：无企业知识依据时拒绝编造，并引导到正确渠道。',
   knowledge_review: '管理员复核处理案例，确认内容可沉淀为可检索知识。',
   ops_accept: '运维人员接单，核验影响范围、账号和证书状态。',
   ops_assist: '汇总处理建议、缺失字段、回访话术和知识引用。',
@@ -61,6 +69,8 @@ const roleMeta: Record<string, { accent: string; label: string }> = {
 };
 
 const statLabels: Record<string, string> = {
+  account_approvals: '账号审批',
+  accounts: '账号档案',
   audit_logs: '审计日志',
   closed_issues: '已关闭',
   issues: '在线记录',
@@ -77,6 +87,7 @@ const demoWindows = [
 ] as const;
 
 const panels = computed(() => ({
+  account: state.value.account_window || {},
   admin: state.value.admin_window || {},
   agent: state.value.agent_window || {},
   ops: state.value.ops_window || {},
@@ -153,6 +164,40 @@ const primaryActionText = computed(() => {
 
 const completedCount = computed(() => Math.min(state.value.step_index || 0, steps.value.length));
 
+const scriptedQuestions = computed<any[]>(() => state.value.scripted_questions || []);
+const currentQuestionKey = computed(() => {
+  const step = currentStepName.value;
+  if (['account_approve', 'account_question', 'account_request'].includes(step)) return 'account';
+  if (step === 'fallback_question') return 'fallback';
+  if (['audit_summary', 'finished'].includes(step)) return '';
+  return 'vpn';
+});
+const completedQuestionKeys = computed(() => {
+  const keys = new Set<string>();
+  if (state.value.conversation_id) keys.add('vpn');
+  if (state.value.account_conversation_id || state.value.account_approval_id) keys.add('account');
+  if (state.value.fallback_conversation_id) keys.add('fallback');
+  return keys;
+});
+const questionQueue = computed(() => {
+  return scriptedQuestions.value.map((item, index) => {
+    const active = currentQuestionKey.value === item.key && !isFinished.value;
+    const done = completedQuestionKeys.value.has(item.key);
+    return {
+      ...item,
+      displayIndex: index + 1,
+      status: done ? 'done' : active ? 'active' : 'todo',
+    };
+  });
+});
+const activeQuestion = computed(() => {
+  return questionQueue.value.find((item) => item.status === 'active')
+    || [...questionQueue.value].reverse().find((item) => item.status === 'done')
+    || questionQueue.value[0]
+    || { question: state.value.question || '等待演示初始化', result: '准备中', status: 'todo' };
+});
+const accountPanel = computed(() => panels.value.account || {});
+
 function shortScore(value: number) {
   return `${Math.round((value || 0) * 100)}%`;
 }
@@ -171,6 +216,22 @@ function roleClass(role: string) {
 
 function statLabel(key: string | number) {
   return statLabels[String(key)] || String(key);
+}
+
+function queueStatusLabel(status?: string) {
+  const labels: Record<string, string> = { active: '正在输入', done: '已演示', todo: '排队中' };
+  const key = status || 'todo';
+  return labels[key] || key;
+}
+
+function queueTagColor(status?: string) {
+  const colors: Record<string, string> = { active: 'processing', done: 'green', todo: 'default' };
+  return colors[status || 'todo'] || 'default';
+}
+
+function approvalStatusColor(status?: string) {
+  const colors: Record<string, string> = { approved: 'green', pending: 'orange', rejected: 'red' };
+  return colors[status || ''] || 'default';
 }
 
 function latestFor(role: string, fallback: string) {
@@ -283,7 +344,7 @@ onBeforeUnmount(stopAuto);
 
 <template>
   <div
-    class="demo-page"
+    class="demo-page monitor-mode"
     data-testid="demo-page"
     :data-status="state.status || 'initializing'"
     :data-step-index="state.step_index || 0"
@@ -297,7 +358,7 @@ onBeforeUnmount(stopAuto);
         </div>
         <h1>运维数字员工闭环指挥中心</h1>
         <p>
-          以 VPN 证书过期为业务场景，同屏呈现用户申告、智能研判、运维处置、知识审核与审计留痕，展示从自助服务到知识沉淀的完整闭环。
+          预置 VPN 故障、账号解冻和知识边界三类问题，自动填入对话框并同屏呈现用户申告、智能研判、运维处置、账号审批、知识审核与审计留痕。
         </p>
       </div>
       <div class="hero-console">
@@ -367,6 +428,27 @@ onBeforeUnmount(stopAuto);
               {{ stepLabels[step] || step }}
             </span>
           </div>
+          <div class="script-queue" data-testid="demo-question-queue">
+            <div class="script-queue-head">
+              <span>预置问题队列</span>
+              <small>录屏时自动填入对话框并推进真实后端写表</small>
+            </div>
+            <div class="script-question-grid">
+              <div
+                v-for="item in questionQueue"
+                :key="item.key"
+                :class="['script-question', item.status]"
+              >
+                <i>{{ item.displayIndex }}</i>
+                <div>
+                  <strong>{{ item.label }}</strong>
+                  <p>{{ item.question }}</p>
+                  <small>{{ item.result }}</small>
+                </div>
+                <ATag :color="queueTagColor(item.status)">{{ queueStatusLabel(item.status) }}</ATag>
+              </div>
+            </div>
+          </div>
         </div>
         <div :class="['spotlight-card', roleClass(currentEvent.role)]">
           <span>关键事件聚焦</span>
@@ -410,8 +492,15 @@ onBeforeUnmount(stopAuto);
               <button class="detail-link" type="button" @click="openEventDetail(latestFor('user', '等待用户发起申告'))">详情</button>
             </div>
             <div class="question-card">
-              <span>本次问题</span>
-              <strong>{{ state.question }}</strong>
+              <div class="composer-head">
+                <span>自动填入对话框</span>
+                <ATag :color="queueTagColor(activeQuestion.status)">{{ queueStatusLabel(activeQuestion.status) }}</ATag>
+              </div>
+              <div class="fake-composer">
+                <p>{{ activeQuestion.question }}</p>
+                <i></i>
+              </div>
+              <small>{{ activeQuestion.result }}</small>
             </div>
             <div ref="userScrollRef" class="panel-scroll chat-feed">
               <div v-for="(item, index) in panels.user.messages || []" :key="index" :class="['chat-item', item.role]">
@@ -449,6 +538,10 @@ onBeforeUnmount(stopAuto);
             <ATag v-if="panels.agent.decision?.risk_level" color="orange">
               风险：{{ panels.agent.decision.risk_level }}
             </ATag>
+          </div>
+          <div v-if="panels.agent.controlled || panels.agent.boundary" class="guardrail-box">
+            <b>{{ panels.agent.boundary ? '知识边界' : '受控操作' }}</b>
+            <p>{{ panels.agent.boundary?.answer || panels.agent.controlled?.answer }}</p>
           </div>
           <div ref="agentScrollRef" class="panel-scroll">
             <ol class="trace-list">
@@ -508,6 +601,16 @@ onBeforeUnmount(stopAuto);
               <b>处理结果</b>
               <p>{{ panels.ops.solution }}</p>
             </div>
+            <div v-if="panels.ops.account_approval?.id || accountPanel.approval?.id" class="approval-box">
+              <b>账号审批单 #{{ panels.ops.account_approval?.id || accountPanel.approval?.id }}</b>
+              <div class="mini-tags">
+                <ATag color="geekblue">{{ panels.ops.account_approval?.action || accountPanel.approval?.action }}</ATag>
+                <ATag :color="approvalStatusColor(panels.ops.account_approval?.status || accountPanel.approval?.status)">
+                  {{ panels.ops.account_approval?.status || accountPanel.approval?.status }}
+                </ATag>
+              </div>
+              <p>账号 {{ accountPanel.account?.account_name || state.account_name }} 当前状态：{{ accountPanel.account?.status || '等待审批' }}</p>
+            </div>
           </div>
         </article>
 
@@ -533,6 +636,16 @@ onBeforeUnmount(stopAuto);
               </ATag>
             </div>
             <div v-else class="empty-card">回访完成后会生成待审核知识候选。</div>
+            <div v-if="panels.admin.account_approval?.id || accountPanel.approval?.id" class="approval-box admin-approval">
+              <b>账号审批 #{{ panels.admin.account_approval?.id || accountPanel.approval?.id }}</b>
+              <div class="mini-tags">
+                <ATag :color="approvalStatusColor(panels.admin.account_approval?.status || accountPanel.approval?.status)">
+                  {{ panels.admin.account_approval?.status || accountPanel.approval?.status }}
+                </ATag>
+                <ATag color="green">{{ panels.admin.account?.status || accountPanel.account?.status || '待处理' }}</ATag>
+              </div>
+              <p>{{ panels.admin.account?.account_name || accountPanel.account?.account_name || state.account_name }}</p>
+            </div>
             <div class="stats-grid">
               <div v-for="(value, key) in panels.admin.stats || {}" :key="key">
                 <strong>{{ value }}</strong>
@@ -869,6 +982,118 @@ onBeforeUnmount(stopAuto);
 
 .step-list {
   margin-top: 10px;
+}
+
+.script-queue {
+  border-top: 1px solid rgb(15 23 42 / 8%);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.script-queue-head {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.script-queue-head span {
+  color: var(--demo-blue);
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.script-queue-head small {
+  color: var(--demo-muted);
+  font-size: 11px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.script-question-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.script-question {
+  align-items: start;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-width: 0;
+  padding: 8px;
+  transition: all 0.18s ease;
+}
+
+.script-question > i {
+  background: #cbd5e1;
+  border-radius: 50%;
+  color: #0f172a;
+  display: grid;
+  font-style: normal;
+  font-weight: 950;
+  height: 24px;
+  place-items: center;
+  width: 24px;
+}
+
+.script-question strong,
+.script-question p,
+.script-question small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.script-question strong {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.script-question p {
+  color: var(--demo-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 4px 0;
+}
+
+.script-question small {
+  color: #0f766e;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.script-question :deep(.ant-tag) {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.script-question.done {
+  border-color: rgb(20 184 166 / 34%);
+}
+
+.script-question.done > i {
+  background: #0f766e;
+  color: #fff;
+}
+
+.script-question.active {
+  border-color: rgb(245 158 11 / 58%);
+  box-shadow: 0 0 0 3px rgb(245 158 11 / 12%);
+  transform: translateY(-1px);
+}
+
+.script-question.active > i {
+  animation: pulse-index 1.2s ease-in-out infinite;
+  background: var(--demo-amber);
+  color: #fff;
 }
 
 .spotlight-card {
@@ -1260,6 +1485,8 @@ onBeforeUnmount(stopAuto);
 .assist-box,
 .solution-box,
 .knowledge-card,
+.guardrail-box,
+.approval-box,
 .empty-card {
   background: linear-gradient(180deg, #fff, #f8fafc);
   border: 1px solid #e2e8f0;
@@ -1274,7 +1501,15 @@ onBeforeUnmount(stopAuto);
   flex: 0 0 auto;
 }
 
-.question-card span {
+.composer-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.question-card span,
+.composer-head span {
   color: var(--demo-muted);
   display: block;
   font-size: 11px;
@@ -1287,12 +1522,67 @@ onBeforeUnmount(stopAuto);
 .knowledge-card b,
 .draft-box b,
 .assist-box b,
-.solution-box b {
+.solution-box b,
+.guardrail-box b,
+.approval-box b {
   color: #0f172a;
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.fake-composer {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 10px;
+}
+
+.fake-composer p {
+  color: #0f172a;
+  flex: 1;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fake-composer i {
+  animation: cursor-blink 0.9s steps(2, start) infinite;
+  background: #0f766e;
+  display: block;
+  flex: 0 0 auto;
+  height: 18px;
+  width: 2px;
+}
+
+.question-card > small {
+  color: #0f766e;
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.guardrail-box {
+  flex: 0 0 auto;
+}
+
+.guardrail-box p,
+.approval-box p {
+  color: var(--demo-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-feed,
@@ -1515,6 +1805,18 @@ onBeforeUnmount(stopAuto);
   }
 }
 
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes pulse-index {
+  50% {
+    box-shadow: 0 0 0 7px rgb(245 158 11 / 16%);
+  }
+}
+
 /* Command-center visual pass. The demo is the recording surface, so it gets a
    stronger cockpit treatment than the routine CRUD pages. */
 .demo-page {
@@ -1696,20 +1998,50 @@ onBeforeUnmount(stopAuto);
 .assist-box,
 .solution-box,
 .knowledge-card,
+.guardrail-box,
+.approval-box,
 .empty-card,
 .chat-item,
 .trace-list li,
 .audit-list li,
 .timeline-item,
-.stats-grid div {
+.stats-grid div,
+.script-question {
   background: rgb(15 23 42 / 66%);
   border-color: rgb(148 163 184 / 16%);
 }
 
 .empty-card,
 .question-card span,
-.stats-grid span {
+.stats-grid span,
+.script-queue-head small,
+.script-question p {
   color: #94a3b8;
+}
+
+.script-queue {
+  border-top-color: rgb(148 163 184 / 16%);
+}
+
+.script-queue-head span,
+.script-question small {
+  color: #67e8f9;
+}
+
+.script-question strong,
+.fake-composer p,
+.guardrail-box b,
+.approval-box b {
+  color: #f8fafc;
+}
+
+.fake-composer {
+  background: rgb(2 6 23 / 38%);
+  border-color: rgb(125 211 252 / 18%);
+}
+
+.fake-composer i {
+  background: #67e8f9;
 }
 
 .trace-list strong {
@@ -1801,8 +2133,35 @@ onBeforeUnmount(stopAuto);
     grid-template-columns: 1fr 1fr;
   }
 
+  .script-question-grid {
+    grid-template-columns: 1fr;
+  }
+
   .desktop-dock {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+.demo-page,
+.demo-page * {
+  letter-spacing: 0;
+}
+
+.demo-page [class$='-card'],
+.demo-page [class*='-card '],
+.demo-page .desktop-dock,
+.demo-page .dock-item,
+.demo-page .role-panel,
+.demo-page .window-chrome,
+.demo-page .window-status,
+.demo-page .timeline-item,
+.demo-page .event-modal,
+.demo-page .trace-list li,
+.demo-page .guardrail-box,
+.demo-page .approval-box,
+.demo-page .script-question,
+.demo-page .fake-composer {
+  border-radius: 8px !important;
+}
+
 </style>

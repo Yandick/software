@@ -1,6 +1,7 @@
 [Unit]
 Description=Ops Digital Employee Backend
-After=network.target
+Wants=ops-vllm.service
+After=network.target ops-vllm.service
 
 [Service]
 Type=simple

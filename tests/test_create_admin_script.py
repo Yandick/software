@@ -12,7 +12,7 @@ from backend.app.passwords import verify_password
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
-def run_create_admin(db_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_create_admin(db_path: Path, *args: str, admin_password: str | None = None) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.update(
         {
@@ -23,6 +23,8 @@ def run_create_admin(db_path: Path, *args: str) -> subprocess.CompletedProcess[s
         }
     )
     env.pop("OPS_ADMIN_PASSWORD", None)
+    if admin_password is not None:
+        env["OPS_ADMIN_PASSWORD"] = admin_password
     return subprocess.run(
         [sys.executable, "scripts/create_admin.py", *args],
         cwd=ROOT_DIR,
@@ -57,12 +59,11 @@ def test_create_admin_script_creates_admin_without_demo_seed(tmp_path: Path) -> 
         db_path,
         "--username",
         "platform_admin",
-        "--password",
-        "StrongPassword123!",
         "--real-name",
         "Platform Admin",
         "--department",
         "IT",
+        admin_password="StrongPassword123!",
     )
 
     assert result.returncode == 0, result.stderr
@@ -82,8 +83,8 @@ def test_create_admin_script_creates_admin_without_demo_seed(tmp_path: Path) -> 
 
 def test_create_admin_script_does_not_overwrite_existing_user_without_replace(tmp_path: Path) -> None:
     db_path = tmp_path / "prod.db"
-    first = run_create_admin(db_path, "--username", "platform_admin", "--password", "InitialPassword123!")
-    second = run_create_admin(db_path, "--username", "platform_admin", "--password", "RotatedPassword123!")
+    first = run_create_admin(db_path, "--username", "platform_admin", admin_password="InitialPassword123!")
+    second = run_create_admin(db_path, "--username", "platform_admin", admin_password="RotatedPassword123!")
 
     assert first.returncode == 0, first.stderr
     assert second.returncode == 1
@@ -98,18 +99,17 @@ def test_create_admin_script_does_not_overwrite_existing_user_without_replace(tm
 
 def test_create_admin_script_can_rotate_existing_user_with_replace(tmp_path: Path) -> None:
     db_path = tmp_path / "prod.db"
-    first = run_create_admin(db_path, "--username", "platform_admin", "--password", "InitialPassword123!")
+    first = run_create_admin(db_path, "--username", "platform_admin", admin_password="InitialPassword123!")
     second = run_create_admin(
         db_path,
         "--username",
         "platform_admin",
-        "--password",
-        "RotatedPassword123!",
         "--replace",
         "--real-name",
         "Rotated Admin",
         "--department",
         "Security",
+        admin_password="RotatedPassword123!",
     )
 
     assert first.returncode == 0, first.stderr
@@ -123,3 +123,18 @@ def test_create_admin_script_can_rotate_existing_user_with_replace(tmp_path: Pat
     assert user["department"] == "Security"
     assert verify_password("RotatedPassword123!", user["password_hash"])
     assert count_rows(db_path, "users") == 1
+
+
+def test_create_admin_script_rejects_password_argument_in_production(tmp_path: Path) -> None:
+    db_path = tmp_path / "prod.db"
+
+    result = run_create_admin(
+        db_path,
+        "--username",
+        "platform_admin",
+        "--password",
+        "StrongPassword123!",
+    )
+
+    assert result.returncode == 1
+    assert "do not pass production admin passwords via --password" in result.stderr

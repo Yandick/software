@@ -25,9 +25,14 @@ def test_demo_closed_loop_is_visible_to_user(
     assert demo_body["status"] == "finished"
     assert demo_body["ops_window"]["issue"]["status"] == "closed"
     assert demo_body["admin_window"]["knowledge"]["status"] == "published"
+    assert demo_body["account_window"]["approval"]["status"] == "approved"
+    assert demo_body["account_window"]["account"]["status"] == "active"
+    assert demo_body["fallback_conversation_id"]
 
     issue_id = demo_body["ops_window"]["issue"]["id"]
     conversation_id = demo_body["conversation_id"]
+    account_conversation_id = demo_body["account_conversation_id"]
+    fallback_conversation_id = demo_body["fallback_conversation_id"]
 
     user_issues = client.get("/api/issues", headers=user_headers)
     assert user_issues.status_code == 200, user_issues.text
@@ -36,6 +41,8 @@ def test_demo_closed_loop_is_visible_to_user(
     user_conversations = client.get("/api/qa/conversations", headers=user_headers)
     assert user_conversations.status_code == 200, user_conversations.text
     assert any(item["id"] == conversation_id for item in user_conversations.json())
+    assert any(item["id"] == account_conversation_id for item in user_conversations.json())
+    assert any(item["id"] == fallback_conversation_id for item in user_conversations.json())
 
 
 def test_non_admin_cannot_drive_demo(
