@@ -8,6 +8,17 @@ logs/
 *.log
 .run/
 
+# Internal development notes and planning docs
+/agent*.md
+/rule*.md
+/task*.md
+/mission*.md
+/design*.md
+/model-use*.md
+/last_activity.md
+/last-activity.md
+/docs/
+
 # Python cache / virtual envs
 __pycache__/
 *.py[cod]
