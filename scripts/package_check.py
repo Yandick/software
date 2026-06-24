@@ -76,6 +76,45 @@ def check_model_path() -> dict[str, Any]:
     return check(status, "model path", str(path))
 
 
+def check_embedding_model_path() -> dict[str, Any]:
+    sys.path.insert(0, str(ROOT_DIR))
+    from backend.app.config import get_settings
+
+    settings = get_settings()
+    path = Path(settings.embedding_model_path)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    status = "pass" if path.exists() else "warn"
+    return check(status, "embedding model path", str(path))
+
+
+def check_embedding_index_config() -> dict[str, Any]:
+    sys.path.insert(0, str(ROOT_DIR))
+    from backend.app.config import get_settings
+
+    settings = get_settings()
+    path = Path(settings.embedding_index_dir)
+    if not path.is_absolute():
+        path = ROOT_DIR / path
+    try:
+        import faiss  # noqa: F401
+
+        faiss_status = "available"
+        status = "pass"
+    except Exception:
+        faiss_status = "not installed; numpy index will be used"
+        status = "warn"
+    return check(
+        status,
+        "embedding index",
+        {
+            "backend": settings.embedding_index_backend,
+            "dir": str(path),
+            "faiss": faiss_status,
+        },
+    )
+
+
 def check_frontend_manifest() -> dict[str, Any]:
     package_file = ROOT_DIR / "frontend" / "package.json"
     data = json.loads(package_file.read_text(encoding="utf-8"))
@@ -88,13 +127,21 @@ def check_frontend_manifest() -> dict[str, Any]:
 
 
 def check_command_version(command: str, args: list[str]) -> dict[str, Any]:
-    try:
-        result = run([command, *args], timeout=20)
-    except FileNotFoundError:
-        return check("warn", command, "not found")
-    if result.returncode != 0:
-        return check("warn", command, result.stderr.strip() or result.stdout.strip())
-    return check("pass", command, result.stdout.strip())
+    candidates = [command]
+    env_command = Path(sys.executable).resolve().parent / command
+    if env_command.exists():
+        candidates.insert(0, str(env_command))
+    last_error = ""
+    for candidate in candidates:
+        try:
+            result = run([candidate, *args], timeout=20)
+        except FileNotFoundError as exc:
+            last_error = exc.__class__.__name__
+            continue
+        if result.returncode != 0:
+            return check("warn", command, result.stderr.strip() or result.stdout.strip())
+        return check("pass", command, result.stdout.strip())
+    return check("warn", command, last_error or "not found")
 
 
 def run_pytest() -> dict[str, Any]:
@@ -115,6 +162,8 @@ def main() -> int:
     checks.extend(check_required_files())
     checks.append(check_runtime_config(args.production))
     checks.append(check_model_path())
+    checks.append(check_embedding_model_path())
+    checks.append(check_embedding_index_config())
     checks.append(check_frontend_manifest())
     checks.append(check_command_version(sys.executable, ["--version"]))
     checks.append(check_command_version("node", ["--version"]))

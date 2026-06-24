@@ -229,8 +229,6 @@ const isAuthenticated = computed(() => !!accessStore.accessToken && !!userStore.
 const latestAssistant = computed(() => {
   return [...chatMessages.value].reverse().find((item) => item.role === 'assistant' && !item.loading);
 });
-const latestReferences = computed(() => (latestAssistant.value?.references || []).slice(0, 3));
-const latestQueryTerms = computed(() => latestAssistant.value?.rag?.query_terms || []);
 const loginModeMeta = computed(() => {
   if (portalLoginMode.value === 'staff') {
     return {
@@ -289,25 +287,33 @@ function riskColor(level = '') {
   return colors[level] || 'default';
 }
 
-function riskText(level = '') {
-  const labels: Record<string, string> = { high: '高风险', low: '低风险', medium: '中风险' };
-  return labels[level] || '未识别';
-}
-
 function sourceTypeText(value = '') {
   return sourceTypeMeta[value] || value || '知识';
 }
 
-function answerSourceText(item: ChatMessage) {
-  if (!item.status) return '待分析';
-  return item.llmUsed ? `LLM · ${item.status}` : `规则 · ${item.status}`;
+function isLightweightAnswer(item: ChatMessage) {
+  return item.status === 'lightweight-intent' || item.rag?.strategy === 'lightweight_intent_no_rag';
 }
 
-function answerSourceColor(item: ChatMessage) {
-  if (item.llmUsed) return 'green';
-  if (item.status === 'vllm' || item.status === 'fake-vllm') return 'green';
-  if (item.status === 'unavailable') return 'red';
-  return 'default';
+function showAnswerTags(item: ChatMessage) {
+  return item.role === 'assistant' && !item.loading && !isLightweightAnswer(item);
+}
+
+function showDecisionBox(item: ChatMessage) {
+  return (
+    item.role === 'assistant'
+    && !item.loading
+    && !isLightweightAnswer(item)
+    && Boolean(item.missingFields?.length || item.handoffReasons?.length || item.clarificationQuestions?.length)
+  );
+}
+
+function nextStepTitle(item?: ChatMessage) {
+  if (!item) return '可以先选择一个常用服务，也可以直接描述问题。';
+  if (isLightweightAnswer(item)) return '直接告诉我你遇到的系统、账号或报错现象。';
+  if (item.needHuman) return '这个问题建议提交在线记录，运维人员会接手处理。';
+  if (item.clarificationQuestions?.length) return '补充这些信息后，我能更准确地判断下一步。';
+  return '可以按建议先自助处理；如果仍未解决，再提交在线记录。';
 }
 
 function conversationPreview(item: QaConversation) {
@@ -489,7 +495,7 @@ async function ask(text = question.value) {
     id: assistantMessageId,
     loading: true,
     role: 'assistant',
-    text: '正在检索企业知识库并整理建议...',
+    text: '正在理解你的问题...',
   });
   await scrollToBottom();
 
@@ -975,34 +981,24 @@ watch(
                 <a-spin v-if="item.loading" />
                 <p>{{ item.text }}</p>
 
-                <div v-if="item.role === 'assistant' && !item.loading" class="message-tags">
-                  <a-tag v-if="item.status" :color="answerSourceColor(item)">{{ answerSourceText(item) }}</a-tag>
+                <div v-if="showAnswerTags(item)" class="message-tags">
                   <a-tag v-if="item.intentLabel" color="cyan">{{ item.intentLabel }}</a-tag>
-                  <a-tag v-if="item.riskLevel" :color="riskColor(item.riskLevel)">风险：{{ riskText(item.riskLevel) }}</a-tag>
-                  <a-tag v-if="item.confidence !== undefined" color="geekblue">
-                    置信度 {{ Math.round((item.confidence || 0) * 100) }}%
-                  </a-tag>
+                  <a-tag v-if="item.riskLevel === 'high'" :color="riskColor(item.riskLevel)">高风险</a-tag>
                   <a-tag :color="item.needHuman ? 'red' : 'green'">
                     {{ item.needHuman ? '建议转人工' : '可自助处理' }}
                   </a-tag>
                 </div>
 
                 <div
-                  v-if="item.role === 'assistant' && !item.loading && (item.missingFields?.length || item.handoffReasons?.length || item.nextActions?.length)"
+                  v-if="showDecisionBox(item)"
                   class="decision-box"
                 >
-                  <div v-if="item.automationSummary?.length" class="decision-section">
-                    <span>研判摘要</span>
-                    <ul>
-                      <li v-for="summary in item.automationSummary" :key="summary">{{ summary }}</li>
-                    </ul>
-                  </div>
                   <div v-if="item.missingFields?.length" class="decision-row">
-                    <span>待补充</span>
+                    <span>还需要</span>
                     <a-tag v-for="field in item.missingFields" :key="field" color="orange">{{ field }}</a-tag>
                   </div>
                   <div v-if="item.clarificationQuestions?.length" class="clarify-list">
-                    <span>补充项</span>
+                    <span>快速补充</span>
                     <button
                       v-for="clarification in item.clarificationQuestions"
                       :key="clarification"
@@ -1013,33 +1009,21 @@ watch(
                     </button>
                   </div>
                   <div v-if="item.handoffReasons?.length" class="decision-section">
-                    <span>转人工依据</span>
+                    <span>为什么建议转人工</span>
                     <ul>
                       <li v-for="reason in item.handoffReasons" :key="reason">{{ reason }}</li>
                     </ul>
                   </div>
                 </div>
 
-                <div v-if="item.references?.length" class="reference-list">
-                  <div class="reference-title">
-                    <span>引用来源</span>
-                    <small v-if="item.rag?.strategy">{{ item.rag.strategy }}</small>
-                  </div>
-                  <article v-for="refItem in item.references" :key="refItem.id" class="reference-item">
-                    <div>
-                      <strong>{{ refItem.title }}</strong>
-                      <span>
-                        <a-tag color="blue">{{ sourceTypeText(refItem.source_type) }}</a-tag>
-                        <a-tag color="geekblue">{{ Math.round((refItem.score || 0) * 100) }}%</a-tag>
-                      </span>
-                    </div>
+                <details v-if="item.references?.length" class="source-disclosure">
+                  <summary>查看参考来源</summary>
+                  <article v-for="refItem in item.references.slice(0, 3)" :key="refItem.id" class="source-item">
+                    <strong>{{ refItem.title }}</strong>
+                    <span>{{ sourceTypeText(refItem.source_type) }}</span>
                     <p v-if="refItem.snippet">{{ refItem.snippet }}</p>
-                    <small v-if="refItem.match_reason">{{ refItem.match_reason }}</small>
-                    <div v-if="refItem.matched_terms?.length" class="matched-terms">
-                      <a-tag v-for="term in refItem.matched_terms" :key="`${refItem.id}-${term}`" color="cyan">{{ term }}</a-tag>
-                    </div>
                   </article>
-                </div>
+                </details>
 
                 <div v-if="item.role === 'assistant' && !item.loading" class="message-actions">
                   <button class="small-button" type="button" @click="fillQuestion(item.question || '')">
@@ -1098,31 +1082,29 @@ watch(
         </section>
 
         <aside class="right-rail">
-          <section class="tool-panel rag-panel">
+          <section class="tool-panel next-step-panel">
             <div class="panel-heading">
-              <h2>RAG 证据</h2>
-              <a-tag :color="latestAssistant?.llmUsed ? 'green' : 'default'">
-                {{ latestAssistant ? answerSourceText(latestAssistant) : '等待提问' }}
+              <h2>下一步</h2>
+              <a-tag :color="latestAssistant?.needHuman ? 'red' : 'green'">
+                {{ latestAssistant?.needHuman ? '需要协同' : '自助优先' }}
               </a-tag>
             </div>
-            <div v-if="latestAssistant" class="rag-summary">
-              <div class="rag-score">
-                <span>知识置信度</span>
-                <strong>{{ Math.round(((latestAssistant.confidence || latestAssistant.rag?.confidence || 0) * 100)) }}%</strong>
-              </div>
-              <div v-if="latestQueryTerms.length" class="rag-terms">
-                <a-tag v-for="term in latestQueryTerms" :key="term" color="cyan">{{ term }}</a-tag>
-              </div>
-            </div>
-            <div v-if="latestReferences.length" class="rag-reference-list">
-              <article v-for="refItem in latestReferences" :key="`side-${refItem.id}`">
-                <strong>{{ refItem.title }}</strong>
-                <span>{{ sourceTypeText(refItem.source_type) }} · {{ Math.round((refItem.score || 0) * 100) }}%</span>
-                <p>{{ refItem.snippet || refItem.match_reason }}</p>
-              </article>
-            </div>
-            <div v-else class="rag-empty">
-              <span>先选择一个推荐问题，云维会检索私有知识库并显示引用依据。</span>
+            <div class="next-step-card">
+              <span>{{ nextStepTitle(latestAssistant) }}</span>
+              <button
+                v-if="latestAssistant?.needHuman"
+                class="primary-button compact full"
+                :disabled="creatingIssue || handoffPreparing"
+                type="button"
+                @click="transferToHuman(latestAssistant?.question || '', latestAssistant?.issueDraft)"
+              >
+                <IconifyIcon icon="lucide:file-plus-2" />
+                <span>提交在线记录</span>
+              </button>
+              <button v-else class="outline-button full" type="button" @click="startNewConversation">
+                <IconifyIcon icon="lucide:message-square-plus" />
+                <span>发起新咨询</span>
+              </button>
             </div>
           </section>
 
@@ -2196,7 +2178,7 @@ h2 {
 }
 
 .decision-box,
-.reference-list {
+.source-disclosure {
   background: #fff;
   border: 1px solid #dbeafe;
   border-radius: 8px;
@@ -2212,8 +2194,7 @@ h2 {
 
 .decision-section > span,
 .decision-row > span,
-.clarify-list > span,
-.reference-title span {
+.clarify-list > span {
   color: var(--accent);
   display: block;
   font-size: 12px;
@@ -2246,62 +2227,40 @@ h2 {
   padding: 6px 9px;
 }
 
-.reference-title {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
+.source-disclosure summary {
+  color: #0369a1;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.reference-title small {
-  color: var(--muted);
-}
-
-.reference-item {
+.source-item {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
   padding: 9px;
 }
 
-.reference-item + .reference-item {
-  margin-top: 8px;
+.source-item strong,
+.source-item span,
+.source-item p {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.reference-item div {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.reference-item div > span {
-  align-items: center;
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 4px;
-}
-
-.reference-item p {
-  color: #475467;
-  font-size: 13px;
-  margin-top: 6px;
-}
-
-.reference-item small {
-  color: var(--muted);
-  display: block;
+.source-item span {
+  color: #0369a1;
   font-size: 12px;
-  line-height: 1.45;
-  margin-top: 6px;
+  font-weight: 800;
 }
 
-.matched-terms {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  justify-content: flex-start !important;
-  margin-top: 8px;
+.source-item p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .composer {
@@ -2396,88 +2355,22 @@ h2 {
   margin-top: 8px;
 }
 
-.rag-panel {
+.next-step-panel {
   flex: 0 0 auto;
 }
 
-.rag-summary {
+.next-step-card {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   display: grid;
-  gap: 10px;
+  gap: 12px;
   padding: 10px;
 }
 
-.rag-score {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-
-.rag-score span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.rag-score strong {
-  color: var(--accent);
-  font-size: 20px;
-}
-
-.rag-terms {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.rag-reference-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.rag-reference-list article {
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  padding: 9px;
-}
-
-.rag-reference-list strong,
-.rag-reference-list span,
-.rag-reference-list p {
-  min-width: 0;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.rag-reference-list strong {
-  font-size: 13px;
-  line-height: 1.35;
-}
-
-.rag-reference-list span {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.rag-reference-list p,
-.rag-empty span {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.rag-empty {
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-  padding: 10px;
+.next-step-card > span {
+  color: #344054;
+  line-height: 1.6;
 }
 
 .issue-card-head {

@@ -6,7 +6,9 @@ import { useUserStore } from '@vben/stores';
 import { message, Modal } from 'ant-design-vue';
 
 import {
+  autonomousIngestKnowledge,
   changeKnowledgeStatus,
+  checkKnowledgeDuplicate,
   checkKnowledgeSensitive,
   createKnowledge,
   listKnowledge,
@@ -30,7 +32,9 @@ const q = ref('');
 const statusFilter = ref('');
 const sourceTypeFilter = ref('');
 const loading = ref(false);
+const autoSubmitting = ref(false);
 const submitting = ref(false);
+const duplicateChecking = ref(false);
 const sensitiveChecking = ref(false);
 const editOpen = ref(false);
 const documentFileList = ref<any[]>([]);
@@ -104,12 +108,64 @@ async function submit() {
       message.error('知识内容包含高风险敏感信息，请先脱敏后再发布');
       return;
     }
+    const duplicate = await runDuplicateCheck('create', false);
+    if (duplicate?.blocking) {
+      Modal.warning({
+        content: duplicateSummary(duplicate),
+        okText: '知道了',
+        title: '发现重复知识',
+      });
+      return;
+    }
+    if (duplicate?.decision === 'near_duplicate') {
+      message.warning('发现疑似重复知识，已作为审核提示随候选提交');
+    }
     await createKnowledge(form.value);
     form.value = { ...emptyForm };
     message.success('知识已提交，可审核发布后进入数字员工检索范围');
     await load();
   } finally {
     submitting.value = false;
+  }
+}
+
+function autoActionLabel(action: string) {
+  return (
+    {
+      inserted: '已写入',
+      inserted_merge_candidate: '已生成合并候选',
+      merged_existing: '已自动合并',
+      skipped_exact_duplicate: '精确重复已跳过',
+      skipped_redundant_duplicate: '冗余重复已跳过',
+    }[action] || action
+  );
+}
+
+async function autonomousSubmit() {
+  if (!canMaintain.value) {
+    message.warning('只有管理员或运维人员可以维护知识库');
+    return;
+  }
+  if (!form.value.title.trim() || !form.value.content.trim()) {
+    message.warning('请填写知识标题和内容');
+    return;
+  }
+  autoSubmitting.value = true;
+  try {
+    const result = await autonomousIngestKnowledge(form.value);
+    const itemText = result.item?.id ? ` #${result.item.id} ${result.item.title || ''}` : '';
+    message.success(`${autoActionLabel(result.action)}${itemText}`);
+    if (result.novel_units?.length) {
+      Modal.info({
+        content: result.novel_units.slice(0, 5).join('；'),
+        okText: '知道了',
+        title: '自动合并的新增信息',
+      });
+    }
+    form.value = { ...emptyForm };
+    await load();
+  } finally {
+    autoSubmitting.value = false;
   }
 }
 
@@ -141,7 +197,9 @@ async function submitDocumentUpload() {
       tags: documentTags.value.trim(),
       title: documentTitle.value.trim(),
     });
-    message.success(`已生成 ${result.chunk_count} 个待审核知识片段，脱敏 ${result.redacted_count} 个片段`);
+    message.success(
+      `已生成 ${result.chunk_count} 个待审核知识片段，脱敏 ${result.redacted_count} 个片段，跳过重复 ${result.skipped_count || 0} 个片段`,
+    );
     documentFileList.value = [];
     documentTags.value = '';
     documentTitle.value = '';
@@ -179,6 +237,18 @@ async function saveEdit() {
     message.error('知识内容包含高风险敏感信息，请先脱敏后再发布');
     return;
   }
+  const duplicate = await runDuplicateCheck('edit', false);
+  if (duplicate?.blocking) {
+    Modal.warning({
+      content: duplicateSummary(duplicate),
+      okText: '知道了',
+      title: '发现重复知识',
+    });
+    return;
+  }
+  if (duplicate?.decision === 'near_duplicate') {
+    message.warning('发现疑似重复知识，已记录在审核提示中');
+  }
   await updateKnowledge(editForm.value.id, {
     content: editForm.value.content,
     source_type: editForm.value.source_type,
@@ -205,10 +275,22 @@ function confirmStatus(record: any, status: string) {
     });
     return;
   }
+  if (status === 'published' && record.duplicate_check?.blocking) {
+    Modal.warning({
+      content: duplicateSummary(record.duplicate_check),
+      okText: '知道了',
+      title: '发布前需要处理重复知识',
+    });
+    return;
+  }
+  const duplicateHint =
+    status === 'published' && record.duplicate_check?.decision === 'near_duplicate'
+      ? `\n\n${duplicateSummary(record.duplicate_check)}`
+      : '';
   Modal.confirm({
     content:
       status === 'published'
-        ? '发布后该条知识会进入数字员工知识检索范围，请确认内容已审核且不含敏感信息。'
+        ? `发布后该条知识会进入数字员工知识检索范围，请确认内容已审核且不含敏感信息。${duplicateHint}`
         : '状态变更会写入审计日志；下线后该条知识不会再被数字员工用于回答。',
     okText: `确认${meta.label}`,
     onOk: async () => {
@@ -228,6 +310,18 @@ function sensitiveSummary(check: any) {
   return findings
     .map((item: any) => `${item.label} ${item.count || 0} 处，风险等级：${item.severity}`)
     .join('；');
+}
+
+function duplicateSummary(check: any) {
+  const candidates = check?.candidates || [];
+  if (!candidates.length) {
+    return check?.message || '未发现明显重复知识。';
+  }
+  const top = candidates
+    .slice(0, 3)
+    .map((item: any) => `#${item.id} ${item.title}（${item.relation}，相似度 ${item.score}）`)
+    .join('；');
+  return `${check?.message || '发现相似知识'}：${top}`;
 }
 
 function applyRedacted(target: 'create' | 'edit', check: any) {
@@ -281,6 +375,45 @@ async function runSensitiveCheck(target: 'create' | 'edit' = 'create', interacti
     return check;
   } finally {
     sensitiveChecking.value = false;
+  }
+}
+
+async function runDuplicateCheck(target: 'create' | 'edit' = 'create', interactive = true) {
+  const current = target === 'create' ? form.value : editForm.value;
+  if (!current.title.trim() && !current.content.trim() && !current.tags.trim()) {
+    if (interactive) {
+      message.warning('请先填写知识标题或内容');
+    }
+    return null;
+  }
+  duplicateChecking.value = true;
+  try {
+    const check = await checkKnowledgeDuplicate({
+      content: current.content,
+      exclude_id: target === 'edit' ? editForm.value.id : undefined,
+      tags: current.tags,
+      title: current.title,
+    });
+    if (interactive) {
+      if (check.blocking) {
+        Modal.warning({
+          content: duplicateSummary(check),
+          okText: '知道了',
+          title: '发现重复知识',
+        });
+      } else if (check.decision === 'near_duplicate') {
+        Modal.info({
+          content: duplicateSummary(check),
+          okText: '知道了',
+          title: '发现疑似重复知识',
+        });
+      } else {
+        message.success('未发现明显重复知识');
+      }
+    }
+    return check;
+  } finally {
+    duplicateChecking.value = false;
   }
 }
 
@@ -353,8 +486,14 @@ onMounted(load);
       <a-button class="mt-4" :disabled="!canMaintain" :loading="submitting" type="primary" @click="submit">
         提交知识
       </a-button>
+      <a-button class="ml-2 mt-4" :disabled="!canMaintain" :loading="autoSubmitting" @click="autonomousSubmit">
+        自动入库
+      </a-button>
       <a-button class="ml-2 mt-4" :disabled="!canMaintain" :loading="sensitiveChecking" @click="runSensitiveCheck('create')">
         敏感信息检查
+      </a-button>
+      <a-button class="ml-2 mt-4" :disabled="!canMaintain" :loading="duplicateChecking" @click="runDuplicateCheck('create')">
+        重复检查
       </a-button>
     </a-card>
 
@@ -408,6 +547,8 @@ onMounted(load);
             <div class="mt-1 line-clamp-2 text-sm text-slate-500">{{ record.content }}</div>
             <a-tag v-if="record.sensitive_check?.blocking" class="mt-2" color="red">需脱敏后发布</a-tag>
             <a-tag v-else-if="record.sensitive_check?.has_sensitive" class="mt-2" color="orange">疑似敏感信息</a-tag>
+            <a-tag v-if="record.duplicate_check?.blocking" class="mt-2" color="red">重复知识</a-tag>
+            <a-tag v-else-if="record.duplicate_check?.decision === 'near_duplicate'" class="mt-2" color="orange">疑似重复</a-tag>
           </template>
           <template v-if="column.dataIndex === 'source_type'">
             <a-tag>{{ sourceTypeLabel(record.source_type) }}</a-tag>
@@ -490,6 +631,7 @@ onMounted(load);
           <a-textarea v-model:value="editForm.content" :rows="7" placeholder="知识内容" />
         </a-form-item>
         <a-button :loading="sensitiveChecking" @click="runSensitiveCheck('edit')">敏感信息检查</a-button>
+        <a-button class="ml-2" :loading="duplicateChecking" @click="runDuplicateCheck('edit')">重复检查</a-button>
       </a-form>
     </a-modal>
   </div>

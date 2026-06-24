@@ -63,16 +63,6 @@ const routes: RouteRecordRaw[] = [
           title: '统计审计',
         },
       },
-      {
-        name: 'OpsDemo',
-        path: '/ops/demo',
-        component: () => import('#/views/ops/demo/index.vue'),
-        meta: {
-          authority: ['admin'],
-          icon: 'lucide:monitor-play',
-          title: '闭环演示',
-        },
-      },
     ],
   },
 ];

@@ -25,6 +25,43 @@ class LLMService:
         parsed = self._parse_json_object(result["content"])
         return self._normalize_issue_draft(description, rule_draft, parsed, result.get("status", "vllm"))
 
+    def generate_agent_json(
+        self,
+        *,
+        agent_name: str,
+        prompt: str,
+        task: str,
+        state: dict[str, Any],
+        schema_hint: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Ask one subagent for a structured review.
+
+        The result is advisory metadata. Callers must keep deterministic safety
+        gates as the final authority for writes and high-risk operations.
+        """
+        user = (
+            "/no_think\n"
+            f"Agent name: {agent_name}\n"
+            f"Task:\n{task}\n\n"
+            "Workflow state JSON:\n"
+            f"{json.dumps(state, ensure_ascii=False, default=str)[:12000]}\n\n"
+            "Return one JSON object only. Follow this schema hint:\n"
+            f"{json.dumps(schema_hint, ensure_ascii=False, default=str)}"
+        )
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user},
+        ]
+        result = self._generate_vllm(messages, thinking=False, timeout=get_settings().agent_llm_timeout_seconds)
+        parsed = self._parse_json_object(result["content"])
+        return {
+            "agent": agent_name,
+            "ok": True,
+            "parsed": parsed,
+            "reasoning_available": result.get("reasoning_available", False),
+            "status": result.get("status", "vllm"),
+        }
+
     def status(self) -> dict[str, Any]:
         settings = get_settings()
         try:
@@ -109,7 +146,7 @@ class LLMService:
             return {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0, "presence_penalty": 1.1}
         return {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0, "presence_penalty": 1.1}
 
-    def _generate_vllm(self, messages: list[dict[str, str]], thinking: bool) -> dict[str, Any]:
+    def _generate_vllm(self, messages: list[dict[str, str]], thinking: bool, timeout: int = 60) -> dict[str, Any]:
         settings = get_settings()
         payload: dict[str, Any] = {
             "model": settings.vllm_model_name,
@@ -119,7 +156,7 @@ class LLMService:
             "chat_template_kwargs": {"enable_thinking": thinking},
         }
         try:
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=timeout) as client:
                 resp = client.post(f"{settings.vllm_base_url.rstrip('/')}/chat/completions", json=payload)
                 resp.raise_for_status()
                 data = resp.json()

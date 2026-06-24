@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db_path = tmp_path / "test.db"
     monkeypatch.setenv("OPS_DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("OPS_ENABLE_EMBEDDING_RAG", "false")
 
     from backend.app.config import get_settings
 

@@ -10,9 +10,12 @@ from threading import RLock
 from typing import Any
 
 from ..database import connect, rows_to_dicts
+from .embedding_service import embedding_service
+from .vector_index_service import vector_index_service
 
 HIGH_RISK_PATTERNS = [
     "删除", "清空", "生产", "提权", "权限提升", "数据库重启", "重启数据库", "泄露", "攻击", "勒索", "批量", "root", "sudo",
+    "绕过审批", "跳过审批", "免审批", "破解", "撞库", "盗号", "越权", "清除日志", "删除日志",
 ]
 
 CONTROLLED_OPERATION_PATTERNS = [
@@ -23,6 +26,9 @@ CONTROLLED_OPERATION_PATTERNS = [
         r"(开通|申请|修改|变更|扩大|提升|授予|增加).{0,12}(管理员|root|sudo|高权限|权限|角色)",
         r"(管理员|root|sudo|高权限).{0,8}(权限|账号|角色)",
         r"权限.{0,8}(变更|提升|扩大|开通|修改|授权)",
+        r"(绕过|跳过|免).{0,8}审批",
+        r"(破解|盗用|撞库).{0,8}(密码|账号|账户)",
+        r"(清除|删除).{0,8}(审计|操作)?日志",
     ]
 ]
 
@@ -75,6 +81,8 @@ STOP_TERMS = {
 CHUNK_MAX_CHARS = 260
 SNIPPET_MAX_CHARS = 180
 MIN_REFERENCE_SCORE = 0.05
+MIN_EMBEDDING_REFERENCE_SCORE = 0.28
+MIN_EMBEDDING_ONLY_SCORE = 0.55
 
 
 @dataclass
@@ -83,17 +91,22 @@ class RetrievalResult:
     confidence: float
     high_risk: bool
     query_terms: list[str] = field(default_factory=list)
-    strategy: str = "hybrid_keyword_chunk"
+    strategy: str = "qwen3_embedding_hybrid_rerank"
+
+
+@dataclass
+class RetrievalScore:
+    final: float
+    detail: dict[str, Any]
 
 
 class RagService:
-    """Deterministic RAG retriever for the operations digital employee.
+    """Embedding-first RAG retriever for the operations digital employee.
 
-    The project avoids a heavyweight vector dependency for the course demo, but
-    the retriever still needs RAG-grade behavior: chunked evidence, source
-    attribution, explainable matches, and conservative confidence. This hybrid
-    lexical implementation can later be replaced by a vector store without
-    changing the API contract used by the digital employee.
+    The primary retriever uses the local Qwen3-Embedding model for dense
+    similarity, then mixes in lexical/title/tag evidence as a conservative
+    reranking signal. If embedding is explicitly disabled or unavailable, the
+    service falls back to keyword reranking and marks the strategy accordingly.
     """
 
     def __init__(self) -> None:
@@ -102,6 +115,7 @@ class RagService:
         self._cache_items: list[dict[str, Any]] = []
         self._cache_chunks: list[dict[str, Any]] = []
         self._cache_idf: dict[str, float] = {}
+        self._cache_embedding_status: dict[str, Any] = {}
 
     def clear_cache(self) -> None:
         with self._cache_lock:
@@ -109,6 +123,7 @@ class RagService:
             self._cache_items = []
             self._cache_chunks = []
             self._cache_idf = {}
+            self._cache_embedding_status = {}
 
     def _knowledge_signature(self, conn: Any) -> tuple[Any, ...]:
         db_row = conn.execute("pragma database_list").fetchone()
@@ -144,43 +159,49 @@ class RagService:
         ).fetchall()
         return rows_to_dicts(rows)
 
-    def _get_index(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
+    def _get_index(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float], dict[str, Any]]:
         with connect() as conn:
             cache_key = self._knowledge_signature(conn)
             with self._cache_lock:
                 if self._cache_key == cache_key:
-                    return self._cache_items, self._cache_chunks, self._cache_idf
+                    return self._cache_items, self._cache_chunks, self._cache_idf, self._cache_embedding_status
             items = self._query_published_knowledge(conn)
 
         chunks = self._build_chunks(items)
         idf = self._build_idf(chunks)
+        embedding_status = self._attach_embeddings(chunks, cache_key)
         with self._cache_lock:
             self._cache_key = cache_key
             self._cache_items = items
             self._cache_chunks = chunks
             self._cache_idf = idf
-        return items, chunks, idf
+            self._cache_embedding_status = embedding_status
+        return items, chunks, idf, embedding_status
 
     def _load_knowledge(self) -> list[dict[str, Any]]:
-        items, _, _ = self._get_index()
+        items, _, _, _ = self._get_index()
         return items
 
     def search(self, question: str, limit: int = 4) -> RetrievalResult:
-        items, chunks, idf = self._get_index()
+        items, chunks, idf, embedding_status = self._get_index()
         high_risk = self.is_high_risk(question)
         if not items:
             return RetrievalResult([], 0.0, high_risk)
 
         query_terms = self._tokenize(question)
         display_query_terms = self._display_terms(question, query_terms)
-        if not query_terms:
+        query_embedding = self._query_embedding(question, embedding_status)
+        strategy = self._retrieval_strategy(query_embedding, embedding_status)
+        if not query_terms and query_embedding is None:
             return RetrievalResult([], 0.0, high_risk, display_query_terms)
 
         scored: list[dict[str, Any]] = []
-        for chunk in chunks:
-            score, detail = self._score_chunk(question, query_terms, chunk, idf)
-            if score >= MIN_REFERENCE_SCORE:
-                scored.append({**chunk, "score": score, "score_detail": detail})
+        for chunk_index in self._candidate_chunk_indexes(question, query_terms, query_embedding, chunks, limit):
+            chunk = chunks[chunk_index]
+            score = self._score_chunk(question, query_terms, query_embedding, chunk, idf, strategy)
+            threshold = MIN_EMBEDDING_REFERENCE_SCORE if query_embedding is not None else MIN_REFERENCE_SCORE
+            if score.final >= threshold:
+                scored.append({**chunk, "score": score.final, "score_detail": score.detail})
 
         scored.sort(
             key=lambda item: (
@@ -209,6 +230,7 @@ class RagService:
                     "snippet": snippet,
                     "matched_terms": matched_terms[:8],
                     "match_reason": self._match_reason(item, matched_terms, chunk["score_detail"]),
+                    "retrieval_stage": self._retrieval_stage(query_embedding, embedding_status),
                     "score_detail": chunk["score_detail"],
                 }
             )
@@ -216,7 +238,7 @@ class RagService:
                 break
 
         confidence = float(refs[0]["score"]) if refs else 0.0
-        return RetrievalResult(refs, confidence, high_risk, display_query_terms)
+        return RetrievalResult(refs, confidence, high_risk, display_query_terms, strategy)
 
     def suggest(self, keyword: str = "", limit: int = 8) -> list[dict[str, Any]]:
         items = self._load_knowledge()
@@ -289,6 +311,7 @@ class RagService:
                     {
                         "knowledge": item,
                         "chunk_index": index,
+                        "searchable": searchable,
                         "text": text,
                         "terms": self._tokenize(searchable),
                         "title_terms": self._tokenize(str(item.get("title", ""))),
@@ -327,9 +350,11 @@ class RagService:
         self,
         question: str,
         query_terms: set[str],
+        query_embedding: list[float] | None,
         chunk: dict[str, Any],
         idf: dict[str, float],
-    ) -> tuple[float, dict[str, Any]]:
+        strategy: str,
+    ) -> RetrievalScore:
         total_weight = sum(idf.get(term, 1.0) for term in query_terms) or 1.0
         overlap = query_terms & chunk["terms"]
         title_overlap = query_terms & chunk["title_terms"]
@@ -338,26 +363,132 @@ class RagService:
         title_score = sum(idf.get(term, 1.0) for term in title_overlap) / total_weight
         tag_score = sum(idf.get(term, 1.0) for term in tag_overlap) / total_weight
         phrase_score = self._phrase_score(question, chunk)
+        embedding_score = self._embedding_score(query_embedding, chunk.get("embedding"))
 
-        score = min(1.0, 0.56 * overlap_score + 0.22 * title_score + 0.16 * tag_score + 0.06 * phrase_score)
+        lexical_score = min(1.0, 0.58 * overlap_score + 0.22 * title_score + 0.14 * tag_score + 0.06 * phrase_score)
         keyword_hits = len(self._matched_display_terms(question, chunk))
         if keyword_hits >= 3:
-            score = min(1.0, score + 0.08)
+            lexical_score = min(1.0, lexical_score + 0.08)
         elif keyword_hits == 2:
-            score = min(1.0, score + 0.04)
+            lexical_score = min(1.0, lexical_score + 0.04)
         if not overlap:
-            score = 0.0
-        if overlap and keyword_hits == 0 and score < 0.12:
-            score *= 0.45
+            lexical_score = 0.0
+        if overlap and keyword_hits == 0 and lexical_score < 0.12:
+            lexical_score *= 0.45
 
-        return round(score, 4), {
+        has_direct_signal = bool(overlap) or keyword_hits > 0 or phrase_score > 0
+        if query_embedding is not None:
+            if not has_direct_signal and embedding_score < MIN_EMBEDDING_ONLY_SCORE:
+                final_score = 0.0
+            else:
+                rerank_boost = 0.04 if embedding_score >= 0.62 and (title_overlap or tag_overlap) else 0.0
+                final_score = min(1.0, 0.7 * embedding_score + 0.22 * lexical_score + 0.05 * phrase_score + 0.03 * tag_score + rerank_boost)
+        else:
+            rerank_boost = 0.04 if lexical_score >= 0.55 and (title_overlap or tag_overlap) else 0.0
+            final_score = min(1.0, lexical_score + 0.04 * phrase_score + rerank_boost)
+
+        return RetrievalScore(round(final_score, 4), {
+            "embedding": round(embedding_score, 4),
+            "final": round(final_score, 4),
+            "lexical": round(lexical_score, 4),
             "overlap": round(overlap_score, 4),
+            "rerank_boost": round(rerank_boost if query_embedding is None or has_direct_signal or embedding_score >= MIN_EMBEDDING_ONLY_SCORE else 0.0, 4),
+            "retriever": strategy,
             "title": round(title_score, 4),
             "tags": round(tag_score, 4),
             "phrase": round(phrase_score, 4),
             "matched_token_count": len(overlap),
             "keyword_hits": keyword_hits,
-        }
+        })
+
+    def _attach_embeddings(self, chunks: list[dict[str, Any]], knowledge_signature: tuple[Any, ...]) -> dict[str, Any]:
+        status = embedding_service.status()
+        if not status["enabled"]:
+            return {**status, "ok": False, "reason": "disabled"}
+        if not chunks:
+            return {**status, "ok": True, "chunk_count": 0}
+        persisted_embeddings, persisted_status = vector_index_service.load_embeddings(
+            chunks=chunks,
+            embedding_status=status,
+            knowledge_signature=knowledge_signature,
+        )
+        if persisted_embeddings is not None:
+            for chunk, embedding in zip(chunks, persisted_embeddings, strict=False):
+                chunk["embedding"] = embedding
+            return {**embedding_service.status(), **persisted_status, "ok": True, "chunk_count": len(chunks)}
+        try:
+            embeddings = embedding_service.embed_documents([str(chunk.get("searchable", "")) for chunk in chunks])
+        except Exception as exc:
+            return {**status, **persisted_status, "ok": False, "error": exc.__class__.__name__}
+        for chunk, embedding in zip(chunks, embeddings, strict=False):
+            chunk["embedding"] = embedding
+        index_status = vector_index_service.save_embeddings(
+            chunks=chunks,
+            embeddings=embeddings,
+            embedding_status=embedding_service.status(),
+            knowledge_signature=knowledge_signature,
+        )
+        return {**embedding_service.status(), **index_status, "ok": True, "chunk_count": len(chunks)}
+
+    def _retrieval_strategy(self, query_embedding: list[float] | None, embedding_status: dict[str, Any]) -> str:
+        if query_embedding is None:
+            return "keyword_rerank_fallback"
+        if str(embedding_status.get("index_backend", "")).startswith("faiss"):
+            return "faiss_qwen3_embedding_hybrid_rerank"
+        return "qwen3_embedding_hybrid_rerank"
+
+    def _retrieval_stage(self, query_embedding: list[float] | None, embedding_status: dict[str, Any]) -> str:
+        if query_embedding is None:
+            return "keyword_rerank_fallback"
+        if str(embedding_status.get("index_backend", "")).startswith("faiss"):
+            return "faiss_embedding_hybrid_rerank"
+        return "embedding_hybrid_rerank"
+
+    def _candidate_chunk_indexes(
+        self,
+        question: str,
+        query_terms: set[str],
+        query_embedding: list[float] | None,
+        chunks: list[dict[str, Any]],
+        limit: int,
+    ) -> list[int]:
+        if query_embedding is None:
+            return list(range(len(chunks)))
+
+        candidate_indexes: set[int] = set()
+        dense_top_k = min(len(chunks), max(40, int(limit) * 12))
+        for hit in vector_index_service.search(query_embedding, top_k=dense_top_k):
+            chunk_index = int(hit.get("chunk_index", -1))
+            if 0 <= chunk_index < len(chunks):
+                candidate_indexes.add(chunk_index)
+
+        if query_terms:
+            for index, chunk in enumerate(chunks):
+                if query_terms & chunk["terms"] or query_terms & chunk["title_terms"] or query_terms & chunk["tag_terms"]:
+                    candidate_indexes.add(index)
+                elif self._phrase_score(question, chunk) > 0:
+                    candidate_indexes.add(index)
+
+        if not candidate_indexes:
+            return list(range(len(chunks)))
+        return sorted(candidate_indexes)
+
+    def _query_embedding(self, question: str, embedding_status: dict[str, Any]) -> list[float] | None:
+        if not embedding_status.get("ok"):
+            return None
+        try:
+            return embedding_service.embed_query(question)
+        except Exception:
+            return None
+
+    def _embedding_score(self, left: list[float] | None, right: list[float] | None) -> float:
+        if not left or not right:
+            return 0.0
+        limit = min(len(left), len(right))
+        if limit <= 0:
+            return 0.0
+        score = sum(float(left[index]) * float(right[index]) for index in range(limit))
+        return max(0.0, min(1.0, score))
 
     def _phrase_score(self, question: str, chunk: dict[str, Any]) -> float:
         normalized_question = self._normalize(question)

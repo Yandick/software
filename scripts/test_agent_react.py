@@ -122,8 +122,16 @@ def main() -> None:
         status = client.get("/api/agent/status", headers=headers)
         assert status.status_code == 200, status.text
         status_body = status.json()
-        assert status_body["mode"] == "controlled_react_prototype"
-        assert set(status_body["tools"]) == {"handoff_script", "issue_draft", "knowledge_search"}
+        assert status_body["mode"] == "single_qwen_multi_agent_orchestrator"
+        assert {item["name"] for item in status_body["agents"]} >= {
+            "supervisor",
+            "risk_guardian",
+            "ops_employee",
+            "knowledge_curator",
+            "evaluator",
+        }
+        assert {"knowledge_search", "issue_draft", "handoff_script", "knowledge_autonomous_ingest"} <= set(status_body["tools"])
+        assert all(item["prompt_loaded"] for item in status_body["agents"])
 
         question = "VPN 无法连接，提示证书过期，影响远程办公，电话 13800138000"
         ask = client.post(
@@ -135,7 +143,7 @@ def main() -> None:
         body = ask.json()
         assert body["llm_used"] is True
         assert body["model_status"] == "fake-vllm"
-        assert body["agent"]["mode"] == "controlled_react_prototype"
+        assert body["agent"]["mode"] == "single_qwen_multi_agent_orchestrator"
         assert body["agent"]["decision"]["action"] in {"self_service_first", "clarify_then_self_service"}
         assert body["agent"]["issue_draft"]["category"] == "network"
         assert body["agent"]["issue_draft"]["extraction_source"] == "llm"
@@ -146,12 +154,14 @@ def main() -> None:
         trace = body["agent"]["trace"]
         phases = [step["phase"] for step in trace]
         tools = [step["tool"] for step in trace]
-        assert phases == ["Reason", "Act", "Act", "Act", "Final"], phases
+        assert phases == ["Route", "Guard", "Act", "Act", "Act", "Curate", "Evaluate", "Final"], phases
         assert "knowledge_search" in tools
         assert "issue_draft" in tools
         assert "handoff_script" in tools
-        assert trace[1]["observation"]["reference_count"] >= 1
-        assert trace[2]["observation"]["extraction_source"] == "llm"
+        knowledge_step = next(step for step in trace if step["tool"] == "knowledge_search")
+        draft_step = next(step for step in trace if step["tool"] == "issue_draft")
+        assert knowledge_step["observation"]["reference_count"] >= 1
+        assert draft_step["observation"]["extraction_source"] == "llm"
 
         draft_resp = client.post("/api/issues/draft", json={"description": question}, headers=headers)
         assert draft_resp.status_code == 200, draft_resp.text
@@ -178,8 +188,8 @@ def main() -> None:
         assistant_msg = messages[-1]
         assert assistant_msg["role"] == "assistant"
         metadata = assistant_msg["metadata"]
-        assert metadata["agent"]["mode"] == "controlled_react_prototype"
-        assert metadata["agent"]["trace"][1]["tool"] == "knowledge_search"
+        assert metadata["agent"]["mode"] == "single_qwen_multi_agent_orchestrator"
+        assert any(step["tool"] == "knowledge_search" for step in metadata["agent"]["trace"])
         assert metadata["issue_draft"]["category"] == "network"
         assert metadata["issue_draft"]["extraction_source"] == "llm"
 
@@ -227,9 +237,6 @@ def main() -> None:
             headers=ops_headers,
         )
         assert cross_write.status_code == 403, cross_write.text
-
-        ops_demo = client.post("/api/demo/session", headers=ops_headers)
-        assert ops_demo.status_code == 403, ops_demo.text
 
         knowledge = client.post(
             "/api/knowledge",
@@ -285,31 +292,6 @@ def main() -> None:
         other_bound_download = client.get(attachment_url, headers=user2_headers)
         assert other_bound_download.status_code == 403, other_bound_download.text
 
-        demo = client.post("/api/demo/session", headers=admin_headers)
-        assert demo.status_code == 200, demo.text
-        demo_body = demo.json()
-        demo_id = demo_body["id"]
-        for _ in range(len(demo_body["steps"])):
-            step = client.post(f"/api/demo/session/{demo_id}/step", headers=admin_headers)
-            assert step.status_code == 200, step.text
-            demo_body = step.json()
-        assert demo_body["status"] == "finished"
-        assert demo_body["agent_window"]["trace"][1]["tool"] == "knowledge_search"
-        assert demo_body["ops_window"]["issue"]["status"] == "closed"
-        assert demo_body["admin_window"]["knowledge"]["status"] == "published"
-        assert demo_body["account_window"]["approval"]["status"] == "approved"
-        assert demo_body["account_window"]["account"]["status"] == "active"
-        assert demo_body["fallback_conversation_id"]
-        assert demo_body["admin_window"]["audit"]
-        demo_issue_id = demo_body["ops_window"]["issue"]["id"]
-        demo_conversation_id = demo_body["conversation_id"]
-        user_demo_issues = client.get("/api/issues", headers=headers)
-        assert user_demo_issues.status_code == 200, user_demo_issues.text
-        assert any(item["id"] == demo_issue_id for item in user_demo_issues.json())
-        user_demo_conversations = client.get("/api/qa/conversations", headers=headers)
-        assert user_demo_conversations.status_code == 200, user_demo_conversations.text
-        assert any(item["id"] == demo_conversation_id for item in user_demo_conversations.json())
-
         user_stats = client.get("/api/audit/stats", headers=headers)
         assert user_stats.status_code == 200, user_stats.text
         assert "accounts" not in user_stats.json()
@@ -325,7 +307,6 @@ def main() -> None:
                 "ok": True,
                 "conversation_id": conversation_id,
                 "issue_id": issue_id,
-                "demo_id": demo_id,
                 "agent_tools": body["agent"]["tools_used"],
                 "trace_steps": len(trace),
                 "extract_source": body["issue_draft"]["extraction_source"],

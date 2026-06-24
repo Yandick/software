@@ -9,11 +9,11 @@ def test_auditor_can_read_and_export_audit_logs(
     client: TestClient,
     auth_headers: Callable[[str, str], dict[str, str]],
 ) -> None:
-    admin_headers = auth_headers("admin", "admin123")
+    from backend.app.database import audit
+
     auditor_headers = auth_headers("auditor", "audit123")
 
-    demo = client.post("/api/demo/session", headers=admin_headers)
-    assert demo.status_code == 200, demo.text
+    audit("manual_test", "pytest", "审计导出测试")
 
     logs = client.get("/api/audit/logs", headers=auditor_headers)
     assert logs.status_code == 200, logs.text

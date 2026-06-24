@@ -83,5 +83,12 @@ def test_status_routes_require_login(
 
     agent = client.get("/api/agent/status", headers=headers)
     assert agent.status_code == 200, agent.text
-    assert agent.json()["mode"] == "controlled_react_prototype"
-    assert set(agent.json()["tools"]) == {"handoff_script", "issue_draft", "knowledge_search"}
+    payload = agent.json()
+    assert payload["mode"] == "single_qwen_multi_agent_orchestrator"
+    assert payload["agent_llm_enabled"] is False
+    assert payload["agent_llm_parallelism"] == 5
+    assert payload["single_model_deployment"] is True
+    assert {item["name"] for item in payload["agents"]} >= {"supervisor", "ops_employee", "knowledge_curator"}
+    assert all(item["prompt_loaded"] for item in payload["agents"])
+    assert all(item["prompt_path"].endswith("/prompt.md") for item in payload["agents"])
+    assert {"knowledge_search", "issue_draft", "handoff_script", "knowledge_autonomous_ingest"} <= set(payload["tools"])

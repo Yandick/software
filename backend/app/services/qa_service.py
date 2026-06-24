@@ -10,6 +10,7 @@ from ..database import connect, rows_to_dicts, utc_now
 from ..deps import ensure_row_exists
 from ..schemas import QuestionRequest
 from .agent_service import agent_service
+from .intent_router_service import IntentRoute, intent_router_service
 from .llm_service import llm_service
 from .rag_service import rag_service
 
@@ -36,6 +37,7 @@ RAG_EVAL_CASES = [
     {"query": "公司 Wi-Fi 连不上，DNS 解析失败怎么排查", "expected": ["Wi-Fi", "网络", "DNS"]},
     {"query": "业务系统白屏并提示 500 或 502 超时", "expected": ["业务系统", "500", "502"]},
 ]
+
 
 def build_issue_draft_by_rules(description: str) -> dict[str, Any]:
     text = description.strip()
@@ -223,6 +225,7 @@ def serialize_rag_references(references: list[dict[str, Any]]) -> list[dict[str,
                 "snippet": item.get("snippet", ""),
                 "matched_terms": item.get("matched_terms", []),
                 "match_reason": item.get("match_reason", ""),
+                "retrieval_stage": item.get("retrieval_stage", ""),
                 "score_detail": item.get("score_detail", {}),
                 "updated_at": item.get("updated_at", ""),
             }
@@ -232,15 +235,11 @@ def serialize_rag_references(references: list[dict[str, Any]]) -> list[dict[str,
 
 def build_no_context_answer(decision: dict[str, Any]) -> str:
     missing = decision.get("missing_fields") or []
-    reasons = decision.get("handoff_reasons") or ["私有知识库没有命中可靠依据"]
     missing_text = "、".join(missing) if missing else "问题现象、影响范围、联系方式和错误截图/日志"
-    reason_text = "；".join(str(item) for item in reasons)
     return (
-        "1) 结论：当前私有知识库没有命中足够可靠的依据，数字员工不能编造处理结论。\n"
-        "2) 处理步骤：请先补充关键信息，并创建在线记录交由运维人员核实。\n"
-        f"3) 需要补充的信息：{missing_text}。\n"
-        f"4) 是否建议转人工：建议转人工。原因：{reason_text}。\n"
-        "5) 引用来源：暂无可引用知识。"
+        "我暂时没有找到足够可靠的企业知识来直接给结论。\n\n"
+        f"为了让运维人员更快定位，请补充：{missing_text}。\n"
+        "如果问题比较急，可以直接提交在线记录，我会把已填写的信息带过去。"
     )
 
 
@@ -321,13 +320,94 @@ def write_qa_message(conversation_id: int, role: str, content: str, metadata: di
         conn.execute("update qa_conversations set updated_at=? where id=?", (utc_now(), conversation_id))
 
 
+def build_intent_route_response(data: QuestionRequest, conversation_id: int, route: IntentRoute) -> dict[str, Any]:
+    answer = route.answer
+    issue_draft = intent_router_service.empty_issue_draft(data.question)
+    agent_result = intent_router_service.agent_result(route)
+    rag_meta = {
+        "confidence": 0.0,
+        "query_terms": [],
+        "strategy": "intent_router_no_rag",
+    }
+    response = {
+        "conversation_id": conversation_id,
+        "answer": answer,
+        "references": [],
+        "rag": rag_meta,
+        "need_human": route.should_handoff,
+        "intent": route.intent,
+        "intent_label": route.intent_label,
+        "risk_level": route.risk_level,
+        "confidence": route.confidence,
+        "missing_fields": [],
+        "clarification_questions": [],
+        "automation_summary": [],
+        "handoff_reasons": [],
+        "model_status": "intent-router",
+        "llm_used": route.source == "llm",
+        "reasoning_enabled": False,
+        "reasoning_available": False,
+        "agent": agent_result,
+        "employee": {
+            "name": "云维",
+            "role": "企业运维数字员工",
+            "mode": "intent_router",
+        },
+        "next_actions": route.next_actions,
+        "issue_draft": issue_draft,
+        "intent_route": route.to_metadata(),
+    }
+    metadata = {
+        "automation_summary": [],
+        "clarification_questions": [],
+        "confidence": route.confidence,
+        "handoff_reasons": [],
+        "intent": route.intent,
+        "intent_label": route.intent_label,
+        "intent_route": route.to_metadata(),
+        "issue_draft": issue_draft,
+        "missing_fields": [],
+        "model_status": "intent-router",
+        "llm_used": route.source == "llm",
+        "risk_level": route.risk_level,
+        "need_human": route.should_handoff,
+        "next_actions": route.next_actions,
+        "references": [],
+        "rag": rag_meta,
+        "reasoning_available": False,
+        "reasoning_enabled": False,
+        "agent": agent_result,
+        "interaction_type": route.kind,
+    }
+    with connect() as conn:
+        conn.execute(
+            "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
+            (data.question, answer, int(route.should_handoff), "intent-router", "[]", utc_now()),
+        )
+    write_qa_message(conversation_id, "user", data.question)
+    write_qa_message(conversation_id, "assistant", answer, metadata)
+    return response
+
+
 def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
     conversation_id, effective_question = prepare_qa_conversation(data, user)
+    intent_route = intent_router_service.route(data.question)
+    if not intent_route.should_rag:
+        return build_intent_route_response(data, conversation_id, intent_route)
+
     result = rag_service.search(effective_question)
     refs = serialize_rag_references(result.references)
-    should_use_llm = bool(refs) and result.confidence >= 0.08 and not result.high_risk
-    draft = build_issue_draft(effective_question, use_llm=should_use_llm)
-    agent_result = agent_service.run(effective_question, rag_service, build_issue_draft, result, draft)
+    should_extract_with_llm = bool(refs) and result.confidence >= 0.08 and not result.high_risk
+    draft = build_issue_draft(effective_question, use_llm=should_extract_with_llm)
+    agent_result = agent_service.run(
+        effective_question,
+        rag_service,
+        build_issue_draft,
+        result,
+        draft,
+        intent_route.to_metadata(),
+    )
+    should_use_llm = bool(agent_result.get("evaluator", {}).get("llm_allowed"))
     context = rag_service.build_context(result.references)
     decision = build_employee_decision(effective_question, result, refs, draft)
     try:
@@ -348,7 +428,10 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
     answer = model_result["content"]
     need_human = decision["need_human"]
     if need_human:
-        answer += "\n\n系统判断该问题建议转人工：请创建在线记录，补充影响范围、联系方式和错误截图/日志。"
+        if result.high_risk:
+            answer += "\n\n我可以继续帮你整理在线记录，由授权运维人员按流程处理。"
+        elif model_result.get("status") != "rag-fallback":
+            answer += "\n\n你可以继续补充信息；如果比较急，也可以直接提交在线记录。"
     with connect() as conn:
         conn.execute(
             "insert into qa_logs(question,answer,need_human,model_status,references_json,created_at) values(?,?,?,?,?,?)",
@@ -382,6 +465,7 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
             "reasoning_available": model_result.get("reasoning_available", False),
             "reasoning_enabled": model_result.get("reasoning_enabled", False),
             "agent": agent_result,
+            "intent_route": intent_route.to_metadata(),
         },
     )
     return {
@@ -414,6 +498,7 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
         },
         "next_actions": decision["next_actions"],
         "issue_draft": decision["issue_draft"],
+        "intent_route": intent_route.to_metadata(),
     }
 
 
@@ -424,8 +509,10 @@ def suggest_knowledge(q: str, limit: int) -> list[dict[str, Any]]:
 def evaluate_rag() -> dict[str, Any]:
     cases = []
     passed = 0
+    strategy = "qwen3_embedding_hybrid_rerank"
     for case in RAG_EVAL_CASES:
         retrieval = rag_service.search(case["query"], limit=3)
+        strategy = retrieval.strategy
         refs = serialize_rag_references(retrieval.references)
         evidence_text = " ".join(
             [
@@ -447,7 +534,7 @@ def evaluate_rag() -> dict[str, Any]:
             }
         )
     return {
-        "strategy": "hybrid_keyword_chunk",
+        "strategy": strategy,
         "total": len(cases),
         "passed": passed,
         "pass_rate": passed / len(cases) if cases else 0,

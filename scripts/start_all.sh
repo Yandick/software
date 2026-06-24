@@ -6,6 +6,29 @@ LOG_DIR="$ROOT_DIR/logs"
 RUN_DIR="$ROOT_DIR/.run"
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
+load_env_defaults() {
+  local env_file="$ROOT_DIR/.env" line key value
+  [[ -f "$env_file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" == *"="* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key//[[:space:]]/}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    value="${value#\"}"
+    value="${value%\"}"
+    value="${value#\'}"
+    value="${value%\'}"
+    if [[ -z "${!key+x}" ]]; then
+      export "$key=$value"
+    fi
+  done <"$env_file"
+}
+
+load_env_defaults
+
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${BACKEND_PORT:-8010}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
@@ -17,13 +40,17 @@ SERVED_MODEL_NAME="${OPS_VLLM_MODEL_NAME:-qwen3-1.7b}"
 VLLM_REASONING_PARSER="${VLLM_REASONING_PARSER:-qwen3}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 PNPM_VERSION="${PNPM_VERSION:-10.33.0}"
-CUDA_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+VLLM_CUDA_DEVICES="${VLLM_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
+EMBEDDING_CUDA_DEVICES="${OPS_EMBEDDING_CUDA_VISIBLE_DEVICES:-${EMBEDDING_CUDA_VISIBLE_DEVICES:-$VLLM_CUDA_DEVICES}}"
+NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
+NCCL_NET="${NCCL_NET:-Socket}"
+NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
 START_FRONTEND=1
 INSTALL_FRONTEND=0
 VLLM_TIMEOUT="${VLLM_TIMEOUT:-420}"
 BACKEND_TIMEOUT="${BACKEND_TIMEOUT:-90}"
-VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.55}"
+VLLM_GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-}"
 VLLM_MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-40960}"
 
 SERVICE_NAMES=(frontend backend vllm)
@@ -43,19 +70,31 @@ Usage: scripts/start_all.sh [options]
 Options:
   --no-frontend         只启动 vLLM + 后端
   --install-frontend    启动前执行 pnpm install
-  --cuda-devices VALUE  设置 CUDA_VISIBLE_DEVICES，例如 0、1、0,1；默认 0
+  --cuda-devices VALUE  设置 vLLM/base model 使用的 GPU，例如 0、1、0,1；默认读取 CUDA_VISIBLE_DEVICES 或 0
+  --vllm-cuda-devices VALUE       设置 vLLM/base model 使用的 GPU
+  --embedding-cuda-devices VALUE  设置后端 embedding model 使用的 GPU
   -h, --help            显示帮助
 
 Env:
   BACKEND_PORT          后端端口，默认 8010
   FRONTEND_PORT         前端端口，默认 5666
-  CUDA_VISIBLE_DEVICES  指定可见 GPU；脚本默认设为 0
+  CUDA_VISIBLE_DEVICES  兼容入口：指定 vLLM/base model GPU；脚本默认设为 0
+  VLLM_CUDA_VISIBLE_DEVICES  指定 vLLM/base model GPU，优先于 CUDA_VISIBLE_DEVICES
+  OPS_EMBEDDING_CUDA_VISIBLE_DEVICES  指定 embedding model GPU；设置后后端只看到这些 GPU
+  OPS_EMBEDDING_DEVICE  embedding torch device；默认 auto，配合 OPS_EMBEDDING_CUDA_VISIBLE_DEVICES 时可保持 auto
   OPS_MODEL_PATH        模型路径，默认 models/qwen3-1.7b
   OPS_VLLM_MODEL_NAME   vLLM served model name，默认 qwen3-1.7b
   VLLM_REASONING_PARSER vLLM reasoning parser，默认 qwen3
   VLLM_TIMEOUT          等待 vLLM 秒数，默认 420
-  VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率，默认 0.55
+  VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率；未设置时按模型规模和上下文自动估算
   VLLM_MAX_MODEL_LEN    vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
+  VLLM_TENSOR_PARALLEL_SIZE    vLLM tensor parallel 大小；默认按 vLLM GPU 数量推导
+  VLLM_MAX_NUM_SEQS     vLLM 最大并发序列数；需要时设置，例如 16
+  VLLM_MAX_NUM_BATCHED_TOKENS  vLLM 每批 token 上限；需要时设置，例如 8192
+  NCCL_IB_DISABLE      默认 1；单机多卡默认关闭 IB，避免 NCCL net plugin 在无 IB 环境崩溃
+  NCCL_NET             默认 Socket；单机多卡默认使用 socket bootstrap
+  OPS_ENABLE_AGENT_LLM  是否启用真实 subagent LLM 审阅；默认 false
+  OPS_AGENT_LLM_PARALLELISM  subagent LLM 并行审阅数量；默认 5
 USAGE
 }
 
@@ -63,10 +102,15 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-frontend) START_FRONTEND=0 ;;
     --install-frontend) INSTALL_FRONTEND=1 ;;
-    --cuda-devices)
+    --cuda-devices|--vllm-cuda-devices)
       shift
       if [[ $# -eq 0 ]]; then echo "--cuda-devices requires a value"; exit 2; fi
-      CUDA_DEVICES="$1"
+      VLLM_CUDA_DEVICES="$1"
+      ;;
+    --embedding-cuda-devices)
+      shift
+      if [[ $# -eq 0 ]]; then echo "--embedding-cuda-devices requires a value"; exit 2; fi
+      EMBEDDING_CUDA_DEVICES="$1"
       ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 2 ;;
@@ -95,8 +139,15 @@ run_python_bg() {
 
 pid_is_project_owned() {
   local pid="$1" cwd cmdline
+  if [[ ! -d "/proc/$pid" ]]; then
+    return 1
+  fi
   cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
-  cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  else
+    cmdline=""
+  fi
   [[ "$cwd" == "$ROOT_DIR" || "$cwd" == "$ROOT_DIR/frontend" || "$cmdline" == *"$ROOT_DIR"* || "$cmdline" == *"backend.app.main"* || "$cmdline" == *"vllm.entrypoints.openai.api_server"* ]]
 }
 
@@ -278,40 +329,103 @@ first_cuda_device() {
   echo "$value"
 }
 
+count_cuda_devices() {
+  local value="$1"
+  if [[ -z "$value" ]]; then
+    echo 1
+    return
+  fi
+  awk -F',' '{print NF}' <<<"$value"
+}
+
+model_params_billion() {
+  local value
+  value="$(basename "$MODEL_PATH" | tr '[:upper:]' '[:lower:]')"
+  "$PYTHON_BIN" - "$value" <<'PY'
+import re
+import sys
+name = sys.argv[1]
+match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*b\b", name.replace("-", " "))
+if not match:
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)b", name)
+print(match.group(1) if match else "0")
+PY
+}
+
+auto_vllm_gpu_memory_utilization() {
+  local params_b="$1" max_model_len="$2" tp_size="$3"
+  "$PYTHON_BIN" - "$params_b" "$max_model_len" "$tp_size" <<'PY'
+import sys
+params = float(sys.argv[1] or 0)
+max_len = int(float(sys.argv[2] or 0))
+tp = max(1, int(float(sys.argv[3] or 1)))
+if params <= 0:
+    util = 0.60
+elif params <= 2:
+    util = 0.58 if max_len >= 32768 else 0.50
+elif params <= 4:
+    util = 0.64 if max_len >= 32768 else 0.58
+elif params <= 8:
+    util = 0.74
+elif params <= 14:
+    util = 0.84
+else:
+    util = 0.90
+if tp >= 2 and params <= 4 and max_len >= 32768:
+    util = min(0.62, util + 0.03)
+print(f"{util:.2f}")
+PY
+}
+
+visible_cuda_devices() {
+  local value="$1"
+  IFS=',' read -ra devices <<<"$value"
+  for device in "${devices[@]}"; do
+    device="${device//[[:space:]]/}"
+    if [[ -n "$device" ]]; then
+      echo "$device"
+    fi
+  done
+}
+
 check_gpu_memory() {
+  local cuda_devices="$1" utilization="$2" label="$3"
   if ! command -v nvidia-smi >/dev/null 2>&1; then
     log "nvidia-smi 不可用，跳过显存预检查。"
     return 0
   fi
-  local gpu_id free_mib total_mib used_mib required_mib
-  gpu_id="$(first_cuda_device "$CUDA_VISIBLE_DEVICES")"
-  if [[ ! "$gpu_id" =~ ^[0-9]+$ ]]; then
-    log "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES 不是纯 GPU 编号，跳过显存预检查。"
+  local gpu_id free_mib total_mib used_mib required_mib line
+  if [[ "$cuda_devices" != *","* && ! "$cuda_devices" =~ ^[0-9]+$ ]]; then
+    log "$label CUDA_VISIBLE_DEVICES=$cuda_devices 不是纯 GPU 编号，跳过显存预检查。"
     return 0
   fi
-  local line
-  line="$(nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free --format=csv,noheader,nounits | awk -F', ' -v id="$gpu_id" '$1 == id {print $0}')"
-  if [[ -z "$line" ]]; then
-    log "未找到 GPU $gpu_id，请检查 CUDA_VISIBLE_DEVICES。"
-    exit 1
-  fi
-  IFS=', ' read -r _ total_mib used_mib free_mib <<<"$line"
-  required_mib="$($PYTHON_BIN - <<PY2
-print(int(float('$total_mib') * float('$VLLM_GPU_MEMORY_UTILIZATION')))
+  while read -r gpu_id; do
+    [[ -z "$gpu_id" ]] && continue
+    if [[ ! "$gpu_id" =~ ^[0-9]+$ ]]; then
+      log "$label CUDA_VISIBLE_DEVICES 包含非数字 GPU 标识：$gpu_id，跳过显存预检查。"
+      return 0
+    fi
+    line="$(nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free --format=csv,noheader,nounits | awk -F', ' -v id="$gpu_id" '$1 == id {print $0}')"
+    if [[ -z "$line" ]]; then
+      log "未找到 GPU $gpu_id，请检查 $label GPU 配置。"
+      exit 1
+    fi
+    IFS=', ' read -r _ total_mib used_mib free_mib <<<"$line"
+    required_mib="$($PYTHON_BIN - <<PY2
+print(int(float('$total_mib') * float('$utilization')))
 PY2
 )"
-  log "GPU $gpu_id memory: total=${total_mib}MiB used=${used_mib}MiB free=${free_mib}MiB; vLLM target=${required_mib}MiB"
-  if (( free_mib < required_mib )); then
-    log "GPU $gpu_id 空闲显存不足以按 VLLM_GPU_MEMORY_UTILIZATION=$VLLM_GPU_MEMORY_UTILIZATION 启动 vLLM。"
-    log "请先运行 nvidia-smi 选择空闲 GPU，例如：CUDA_VISIBLE_DEVICES=6 ./scripts/start_all.sh"
-    log "如果必须使用当前 GPU，可降低上下文或显存比例，例如：VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.25 CUDA_VISIBLE_DEVICES=$gpu_id ./scripts/start_all.sh"
-    exit 1
-  fi
+    log "$label GPU $gpu_id memory: total=${total_mib}MiB used=${used_mib}MiB free=${free_mib}MiB; target=${required_mib}MiB"
+    if (( free_mib < required_mib )); then
+      log "GPU $gpu_id 空闲显存不足以按 utilization=$utilization 启动 $label。"
+      log "请先运行 nvidia-smi 选择空闲 GPU，例如：VLLM_CUDA_VISIBLE_DEVICES=0,1 OPS_EMBEDDING_CUDA_VISIBLE_DEVICES=2 ./scripts/start_all.sh"
+      log "如果必须使用当前 GPU，可降低上下文或显存比例，例如：VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 VLLM_CUDA_VISIBLE_DEVICES=$gpu_id ./scripts/start_all.sh"
+      exit 1
+    fi
+  done < <(visible_cuda_devices "$cuda_devices")
 }
 
 cd "$ROOT_DIR"
-export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
-export OPS_CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 export BACKEND_HOST BACKEND_PORT FRONTEND_HOST FRONTEND_PORT
 
 require_cmd "$PYTHON_BIN"
@@ -327,24 +441,47 @@ fi
 log "project root: $ROOT_DIR"
 log "python: $(command -v "$PYTHON_BIN")"
 log "node: $([[ "$START_FRONTEND" == 1 ]] && command -v node || echo 'not required')"
-log "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-log "vLLM memory config: gpu_memory_utilization=$VLLM_GPU_MEMORY_UTILIZATION, max_model_len=$VLLM_MAX_MODEL_LEN"
+VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-$(count_cuda_devices "$VLLM_CUDA_DEVICES")}"
+if [[ -z "$VLLM_GPU_MEMORY_UTILIZATION" ]]; then
+  MODEL_PARAMS_B="$(model_params_billion)"
+  VLLM_GPU_MEMORY_UTILIZATION="$(auto_vllm_gpu_memory_utilization "$MODEL_PARAMS_B" "$VLLM_MAX_MODEL_LEN" "$VLLM_TENSOR_PARALLEL_SIZE")"
+  VLLM_GPU_MEMORY_UTILIZATION_SOURCE="auto(model_params=${MODEL_PARAMS_B}B)"
+else
+  VLLM_GPU_MEMORY_UTILIZATION_SOURCE="manual"
+fi
+log "vLLM CUDA_VISIBLE_DEVICES=$VLLM_CUDA_DEVICES"
+log "backend/embedding CUDA_VISIBLE_DEVICES=$EMBEDDING_CUDA_DEVICES"
+log "vLLM memory config: gpu_memory_utilization=$VLLM_GPU_MEMORY_UTILIZATION [$VLLM_GPU_MEMORY_UTILIZATION_SOURCE], max_model_len=$VLLM_MAX_MODEL_LEN, tensor_parallel_size=$VLLM_TENSOR_PARALLEL_SIZE"
+log "NCCL config for vLLM: NCCL_IB_DISABLE=$NCCL_IB_DISABLE, NCCL_NET=$NCCL_NET, NCCL_DEBUG=$NCCL_DEBUG"
 
 stop_known_pid_files
 ensure_port_available "$BACKEND_PORT" backend
 if [[ "$START_FRONTEND" == 1 ]]; then ensure_port_available "$FRONTEND_PORT" frontend; fi
 ensure_port_available "$VLLM_PORT" vLLM
-check_gpu_memory
+check_gpu_memory "$VLLM_CUDA_DEVICES" "$VLLM_GPU_MEMORY_UTILIZATION" "vLLM"
 
 log "starting vLLM for Qwen3: $MODEL_PATH"
-run_python_bg vllm -m vllm.entrypoints.openai.api_server \
+export CUDA_VISIBLE_DEVICES="$VLLM_CUDA_DEVICES"
+export NCCL_IB_DISABLE NCCL_NET NCCL_DEBUG
+unset VLLM_CUDA_VISIBLE_DEVICES
+VLLM_ARGS=(
+  -m vllm.entrypoints.openai.api_server
   --model "$MODEL_PATH" \
   --served-model-name "$SERVED_MODEL_NAME" \
   --host "$VLLM_HOST" \
   --port "$VLLM_PORT" \
   --reasoning-parser "$VLLM_REASONING_PARSER" \
   --gpu-memory-utilization "$VLLM_GPU_MEMORY_UTILIZATION" \
-  --max-model-len "$VLLM_MAX_MODEL_LEN"
+  --max-model-len "$VLLM_MAX_MODEL_LEN" \
+  --tensor-parallel-size "$VLLM_TENSOR_PARALLEL_SIZE"
+)
+if [[ -n "${VLLM_MAX_NUM_SEQS:-}" ]]; then
+  VLLM_ARGS+=(--max-num-seqs "$VLLM_MAX_NUM_SEQS")
+fi
+if [[ -n "${VLLM_MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+  VLLM_ARGS+=(--max-num-batched-tokens "$VLLM_MAX_NUM_BATCHED_TOKENS")
+fi
+run_python_bg vllm "${VLLM_ARGS[@]}"
 if wait_http "http://$VLLM_HOST:$VLLM_PORT/v1/models" "$VLLM_TIMEOUT" vllm "$RUN_DIR/vllm.pid"; then
   export OPS_VLLM_BASE_URL="http://$VLLM_HOST:$VLLM_PORT/v1"
   export OPS_VLLM_MODEL_NAME="$SERVED_MODEL_NAME"
@@ -354,6 +491,8 @@ else
 fi
 
 log "starting backend: http://$BACKEND_HOST:$BACKEND_PORT"
+export CUDA_VISIBLE_DEVICES="$EMBEDDING_CUDA_DEVICES"
+export OPS_EMBEDDING_CUDA_VISIBLE_DEVICES="$EMBEDDING_CUDA_DEVICES"
 run_python_bg backend -m uvicorn backend.app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT"
 wait_http "http://$BACKEND_HOST:$BACKEND_PORT/api/health" "$BACKEND_TIMEOUT" backend "$RUN_DIR/backend.pid" || exit 1
 

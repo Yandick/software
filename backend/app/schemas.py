@@ -26,6 +26,13 @@ class KnowledgeSensitiveCheckRequest(BaseModel):
     tags: str = ""
 
 
+class KnowledgeDuplicateCheckRequest(BaseModel):
+    title: str = ""
+    content: str = ""
+    tags: str = ""
+    exclude_id: int | None = None
+
+
 class QuestionRequest(BaseModel):
     question: str = Field(min_length=1)
     enable_thinking: bool | None = None

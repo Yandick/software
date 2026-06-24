@@ -22,6 +22,22 @@ class Settings(BaseSettings):
     vllm_base_url: str = "http://127.0.0.1:8000/v1"
     vllm_model_name: str = "qwen3-1.7b"
     enable_thinking: bool = False
+    enable_agent_llm: bool = False
+    agent_llm_parallelism: int = 5
+    agent_llm_timeout_seconds: int = 45
+    enable_intent_router_llm: bool = False
+    intent_router_llm_min_confidence: float = 0.72
+    enable_embedding_rag: bool = True
+    embedding_model_path: str = "models/qwen3-embedding-0.6b"
+    embedding_device: str = "auto"
+    embedding_batch_size: int = 8
+    embedding_max_length: int = 8192
+    embedding_dimension: int = 1024
+    embedding_index_dir: str = "backend/data/vector_index"
+    embedding_index_backend: str = "auto"
+    embedding_query_instruction: str = (
+        "Given an enterprise IT operations support query, retrieve relevant private knowledge base passages that answer the query"
+    )
     max_new_tokens: int = 512
     temperature: float = 0.6
     top_p: float = 0.95

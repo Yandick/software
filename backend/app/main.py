@@ -11,7 +11,6 @@ from .database import init_db
 from .routers.accounts import router as accounts_router
 from .routers.audit import router as audit_router
 from .routers.auth import router as auth_router
-from .routers.demo import router as demo_router
 from .routers.issues import router as issues_router
 from .routers.knowledge import router as knowledge_router
 from .routers.qa import router as qa_router
@@ -33,7 +32,6 @@ app = FastAPI(title="运维数字员工系统", lifespan=lifespan)
 app.include_router(accounts_router)
 app.include_router(audit_router)
 app.include_router(auth_router)
-app.include_router(demo_router)
 app.include_router(issues_router)
 app.include_router(knowledge_router)
 app.include_router(qa_router)

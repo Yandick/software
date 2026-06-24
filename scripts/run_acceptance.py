@@ -44,7 +44,6 @@ def check(condition: bool, label: str, detail: Any = "") -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run end-to-end acceptance checks for the ops digital employee project.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8010", help="Backend base URL, without trailing /api")
-    parser.add_argument("--skip-demo", action="store_true", help="Skip the scripted demo workflow")
     parser.add_argument("--allow-llm-not-ready", action="store_true", help="Do not fail when /api/llm/status is not ready")
     args = parser.parse_args()
 
@@ -126,40 +125,6 @@ def main() -> int:
             {"findings": sensitive.get("findings")},
         )
     )
-
-    if not args.skip_demo:
-        demo = request(base_url, "POST", "/api/demo/session", token=admin_token)
-        for _ in range(len(demo.get("steps", []))):
-            demo = request(base_url, "POST", f"/api/demo/session/{demo['id']}/step", token=admin_token)
-        checks.append(
-            check(
-                demo.get("status") == "finished"
-                and demo.get("ops_window", {}).get("issue", {}).get("status") == "closed"
-                and demo.get("admin_window", {}).get("knowledge", {}).get("status") == "published",
-                "scripted closed-loop demo",
-                {"demo_id": demo.get("id"), "status": demo.get("status")},
-            )
-        )
-        checks.append(
-            check(
-                demo.get("account_window", {}).get("approval", {}).get("status") == "approved"
-                and demo.get("account_window", {}).get("account", {}).get("status") == "active"
-                and bool(demo.get("fallback_conversation_id")),
-                "scripted account approval and knowledge-boundary demo",
-                {
-                    "account_status": demo.get("account_window", {}).get("account", {}).get("status"),
-                    "approval_status": demo.get("account_window", {}).get("approval", {}).get("status"),
-                },
-            )
-        )
-        if not args.allow_llm_not_ready:
-            checks.append(
-                check(
-                    demo.get("vpn_model_status") == "vllm",
-                    "demo used real vLLM",
-                    {"model_status": demo.get("vpn_model_status")},
-                )
-            )
 
     audit_export = request(base_url, "GET", "/api/audit/export?limit=50", token=auditor_token)
     checks.append(

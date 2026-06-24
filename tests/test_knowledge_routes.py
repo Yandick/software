@@ -102,6 +102,204 @@ def test_sensitive_check_redacts_phone_and_credential(
     assert {item["type"] for item in payload["findings"]} >= {"credential", "mainland_phone"}
 
 
+def test_duplicate_check_warns_and_blocks_exact_duplicate(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    content = "pytestduplicatetoken VPN 证书续期处理：先核对证书到期时间，再执行受控续期任务，最后通知用户重新登录。"
+    created = create_knowledge(
+        client,
+        admin_headers,
+        "pytest_duplicate_vpn_cert_base",
+        "published",
+    )
+    updated = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_duplicate_vpn_cert_base", "published", content),
+    )
+    assert updated.status_code == 200, updated.text
+
+    exact_check = client.post(
+        "/api/knowledge/duplicate-check",
+        headers=admin_headers,
+        json={
+            "content": content,
+            "tags": "pytest,VPN,证书",
+            "title": "pytest_duplicate_vpn_cert_copy",
+        },
+    )
+    assert exact_check.status_code == 200, exact_check.text
+    exact_body = exact_check.json()
+    assert exact_body["blocking"] is True
+    assert exact_body["decision"] == "exact_duplicate"
+    assert exact_body["candidates"][0]["id"] == created["id"]
+    assert exact_body["candidates"][0]["relation"] == "exact_content"
+
+    duplicate = client.post(
+        "/api/knowledge",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_duplicate_vpn_cert_copy", "pending_review", content),
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["detail"]["duplicate_check"]["decision"] == "exact_duplicate"
+
+    near_check = client.post(
+        "/api/knowledge/duplicate-check",
+        headers=admin_headers,
+        json={
+            "content": f"{content} 适用范围补充：只用于 pytestduplicatetoken 测试环境，不覆盖生产证书审批。",
+            "tags": "pytest,VPN,证书",
+            "title": "pytest_duplicate_vpn_cert_near",
+        },
+    )
+    assert near_check.status_code == 200, near_check.text
+    near_body = near_check.json()
+    assert near_body["blocking"] is False
+    assert near_body["decision"] == "near_duplicate"
+    assert near_body["candidates"][0]["id"] == created["id"]
+
+
+def test_duplicate_check_detects_semantic_alias_and_diff_summary(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    base = client.post(
+        "/api/knowledge",
+        headers=admin_headers,
+        json=knowledge_payload(
+            "pytest_mfa_alias_base",
+            "published",
+            "多因素认证验证码无法接收时，先确认手机时间同步，再检查认证器绑定状态。",
+        )
+        | {"tags": "MFA,验证码"},
+    )
+    assert base.status_code == 200, base.text
+
+    check = client.post(
+        "/api/knowledge/duplicate-check",
+        headers=admin_headers,
+        json={
+            "content": "用户收不到 MFA 短信验证码，需检查多因素认证绑定和手机验证状态。",
+            "tags": "二次验证,手机验证",
+            "title": "二次验证手机验证失败",
+        },
+    )
+    assert check.status_code == 200, check.text
+    body = check.json()
+    assert body["decision"] == "near_duplicate"
+    candidate = body["candidates"][0]
+    assert candidate["id"] == base.json()["id"]
+    assert candidate["domain_similarity"] >= 0.67
+    assert candidate["approx_similarity"] > 0
+    assert candidate["diff"]["semantic_relation"] == "same_problem_new_solution"
+    assert candidate["diff"]["recommended_action"] == "merge_candidate"
+
+
+def test_autonomous_ingest_skips_exact_duplicate_without_creating_row(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    content = "pytestautoskiptok VPN 自动去重：证书到期后执行续期任务，并通知用户重新登录。"
+    created = create_knowledge(client, admin_headers, "pytest_auto_skip_base", "published")
+    updated = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_auto_skip_base", "published", content),
+    )
+    assert updated.status_code == 200, updated.text
+
+    before = client.get("/api/knowledge", headers=admin_headers, params={"q": "pytestautoskiptok"})
+    assert before.status_code == 200, before.text
+    before_count = len(before.json())
+
+    auto = client.post(
+        "/api/knowledge/autonomous-ingest",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_auto_skip_copy", "published", content),
+    )
+    assert auto.status_code == 200, auto.text
+    body = auto.json()
+    assert body["action"] == "skipped_exact_duplicate"
+    assert body["item"]["id"] == created["id"]
+
+    after = client.get("/api/knowledge", headers=admin_headers, params={"q": "pytestautoskiptok"})
+    assert after.status_code == 200, after.text
+    assert len(after.json()) == before_count
+
+
+def test_autonomous_ingest_merges_near_duplicate_into_published_for_admin(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    base_content = "pytestautomergenet VPN 自动合并：先核验证书到期时间，再执行受控续期任务，最后通知用户重新登录。"
+    extra = "新增验证：pytestautomergeextra 完成后检查客户端证书序列号已经刷新。"
+    created = create_knowledge(client, admin_headers, "pytest_auto_merge_base", "published")
+    updated = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_auto_merge_base", "published", base_content),
+    )
+    assert updated.status_code == 200, updated.text
+
+    auto = client.post(
+        "/api/knowledge/autonomous-ingest",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_auto_merge_near", "published", f"{base_content}{extra}"),
+    )
+    assert auto.status_code == 200, auto.text
+    body = auto.json()
+    assert body["action"] == "merged_existing"
+    assert body["item"]["id"] == created["id"]
+    assert extra in body["novel_units"]
+
+    listing = client.get("/api/knowledge", headers=admin_headers, params={"q": "pytestautomergeextra", "status": "published"})
+    assert listing.status_code == 200, listing.text
+    rows = listing.json()
+    assert [row["id"] for row in rows] == [created["id"]]
+    assert "自动合并" in rows[0]["content"]
+    assert "pytestautomergeextra" in rows[0]["content"]
+
+
+def test_autonomous_ingest_ops_creates_pending_merge_candidate_for_published_duplicate(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    ops_headers = auth_headers("ops", "ops123")
+    base_content = "pytestautocandidate VPN 自动候选：先检查客户端版本，再检查证书状态。"
+    extra = "补充步骤：pytestautocandidateextra 若客户端版本过低，先升级再重试连接。"
+    created = create_knowledge(client, admin_headers, "pytest_auto_candidate_base", "published")
+    updated = client.put(
+        f"/api/knowledge/{created['id']}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_auto_candidate_base", "published", base_content),
+    )
+    assert updated.status_code == 200, updated.text
+
+    auto = client.post(
+        "/api/knowledge/autonomous-ingest",
+        headers=ops_headers,
+        json=knowledge_payload("pytest_auto_candidate_near", "published", f"{base_content}{extra}"),
+    )
+    assert auto.status_code == 200, auto.text
+    body = auto.json()
+    assert body["action"] == "inserted_merge_candidate"
+    assert body["item"]["status"] == "pending_review"
+    assert body["item"]["title"].startswith("自动合并候选：")
+
+    published = client.get("/api/knowledge", headers=admin_headers, params={"q": "pytestautocandidateextra", "status": "published"})
+    pending = client.get("/api/knowledge", headers=admin_headers, params={"q": "pytestautocandidateextra", "status": "pending_review"})
+    assert published.status_code == 200, published.text
+    assert pending.status_code == 200, pending.text
+    assert published.json() == []
+    assert pending.json()[0]["id"] == body["item"]["id"]
+
+
 def test_document_upload_splits_redacts_and_enters_rag_after_publish(
     client: TestClient,
     auth_headers: Callable[[str, str], dict[str, str]],
@@ -162,6 +360,44 @@ def test_document_upload_splits_redacts_and_enters_rag_after_publish(
     assert ask.status_code == 200, ask.text
     references = ask.json()["references"]
     assert any(item["id"] == imported["id"] and item["source_type"] == "document" for item in references)
+
+
+def test_document_upload_skips_exact_duplicate_chunks(
+    client: TestClient,
+    auth_headers: Callable[[str, str], dict[str, str]],
+) -> None:
+    admin_headers = auth_headers("admin", "admin123")
+    content = "pytestdocduptoken 文档导入重复片段：确认故障现象、影响范围和回访结果后再沉淀知识。"
+    create_knowledge(
+        client,
+        admin_headers,
+        "pytest_document_duplicate_base",
+        "published",
+    )
+    rows = client.get(
+        "/api/knowledge",
+        headers=admin_headers,
+        params={"q": "pytest_document_duplicate_base", "status": "published"},
+    )
+    base_id = rows.json()[0]["id"]
+    updated = client.put(
+        f"/api/knowledge/{base_id}",
+        headers=admin_headers,
+        json=knowledge_payload("pytest_document_duplicate_base", "published", content),
+    )
+    assert updated.status_code == 200, updated.text
+
+    uploaded = client.post(
+        "/api/knowledge/documents/upload",
+        data={"tags": "pytest,重复", "title": "pytest_document_duplicate_upload"},
+        files={"file": ("duplicate.md", content.encode("utf-8"), "text/markdown")},
+        headers=admin_headers,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    upload_body = uploaded.json()
+    assert upload_body["chunk_count"] == 0
+    assert upload_body["skipped_count"] == 1
+    assert upload_body["skipped_chunks"][0]["duplicate_check"]["decision"] == "exact_duplicate"
 
 
 def test_rag_index_refreshes_after_published_knowledge_update(

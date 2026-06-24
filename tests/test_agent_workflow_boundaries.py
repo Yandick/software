@@ -16,8 +16,16 @@ def test_agent_status_cross_user_write_and_audit_boundaries(
     status = client.get("/api/agent/status", headers=user_headers)
     assert status.status_code == 200, status.text
     status_body = status.json()
-    assert status_body["mode"] == "controlled_react_prototype"
-    assert set(status_body["tools"]) == {"handoff_script", "issue_draft", "knowledge_search"}
+    assert status_body["mode"] == "single_qwen_multi_agent_orchestrator"
+    assert {item["name"] for item in status_body["agents"]} >= {
+        "supervisor",
+        "risk_guardian",
+        "ops_employee",
+        "knowledge_curator",
+        "evaluator",
+    }
+    assert all(item["prompt_loaded"] for item in status_body["agents"])
+    assert {"knowledge_search", "issue_draft", "handoff_script", "knowledge_autonomous_ingest"} <= set(status_body["tools"])
 
     ask = client.post(
         "/api/qa/ask",
