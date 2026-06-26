@@ -1,15 +1,15 @@
 # 运维数字员工系统
 
-一个面向企业运维场景的 AI 数字员工课程项目：本地 Qwen3 大模型、RAG 私有知识库、运维申告门户、在线记录/转人工、人工处理与回访、知识库沉淀、运维账号管理、JWT/RBAC 和审计统计。
+面向企业 IT 运维场景的本地化数字员工系统，覆盖知识检索问答、在线记录流转、人工处理、知识沉淀、账号管理、权限控制与审计统计。模型推理链路基于本地 Qwen3/vLLM，知识检索链路基于 Qwen3-Embedding、FAISS 和本地持久化索引。
 
-## 功能概览
+## 核心能力
 
-- 本地大模型：使用 vLLM 启动 Qwen3，并通过 OpenAI-compatible API 提供推理服务。
-- RAG 知识库：内置运维 FAQ/Runbook 种子知识，使用本地 Qwen3-Embedding 做 hybrid RAG，问答返回引用来源。
-- 运维申告门户：用户可自助提问，无法解决时创建在线记录或转人工。
-- 人工处理闭环：运维人员处理问题、回访用户，确认解决后沉淀为知识案例。
-- 账号管理后台：支持运维账号新增、冻结、解冻、修改、查询，并记录审计日志。
-- 权限与审计：JWT 登录、RBAC 角色权限、问答日志、账号操作日志、知识变更日志。
+- 本地模型服务：通过 vLLM 部署 Qwen3，提供 OpenAI-compatible 推理接口。
+- 私有知识检索：基于 Qwen3-Embedding、FAISS/numpy 持久化索引和关键词重排实现 hybrid RAG。
+- 用户服务门户：支持运维咨询、在线记录提交、处理进度查看和用户反馈。
+- 工作人员管理台：支持记录受理、处理填报、知识候选生成、知识审核和账号管理。
+- 多角色编排：按 intent router、supervisor、risk guardian、ops employee、knowledge curator、evaluator 组织运维任务链路。
+- 权限与审计：基于 JWT/RBAC 控制访问边界，保留问答、处理、账号和知识变更审计记录。
 
 ## 技术栈
 
@@ -87,28 +87,27 @@ pnpm install
 cd ..
 ```
 
-## 启动项目
+## 启动
 
-开发或本地调试时，在项目根目录执行：
+开发调试入口：
 
 ```bash
 ./scripts/start_all.sh
 ```
 
-部署或答辩验收时，建议直接用部署脚本，只需要指定 base model 和 embedding model 的 GPU：
+交付部署入口：
 
 ```bash
 ./scripts/start_deploy.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
 ```
 
-这个入口默认会开启真实 subagent LLM 审阅，并保留 `--no-frontend`、`--install-frontend` 等 `start_all.sh` 参数透传。
+`start_deploy.sh` 默认启用真实 subagent LLM 审阅，并透传 `--no-frontend`、`--install-frontend` 等底层启动参数。
 
-默认服务地址：
+默认端口：
 
-- 用户服务门户：http://127.0.0.1:5666/portal
-- 统一登录门户：http://127.0.0.1:5666/portal
-- 后端：http://127.0.0.1:8010/api/health
-- vLLM：http://127.0.0.1:8000/v1/models
+- 前端：`FRONTEND_PORT=5666`
+- 后端：`BACKEND_PORT=8010`
+- vLLM：`OPS_VLLM_PORT=8000`
 
 首次启动并安装前端依赖：
 
@@ -130,24 +129,24 @@ cd ..
 
 启动脚本统一写入 `.run/frontend.pid`、`.run/backend.pid`、`.run/vllm.pid`；停止脚本也会兼容清理历史的 `*-local.pid`/`*-portal.pid`，并按 `FRONTEND_PORT`、`BACKEND_PORT`、`OPS_VLLM_PORT` 检查和释放本项目占用的端口。
 
-本地生产效果按双入口组织：
+前端入口按角色组织：
 
-- 访问 `http://127.0.0.1:5666/` 会进入面向业务用户的服务门户，而不是后台登录页。
-- `/portal` 提供“用户 / 工作人员”两种身份登录；普通用户登录后只看到数字员工咨询、在线记录提交和本人处理进度。
-- 运维、管理员和审计员在 `/portal` 选择“工作人员”登录后进入 `/ops/*` 管理界面。
+- `/` 和 `/portal` 进入用户服务门户。
+- `/portal` 提供“用户 / 工作人员”两种身份入口；普通用户登录后只展示数字员工咨询、在线记录提交和本人处理进度。
+- 运维、管理员和审计员在 `/portal` 选择“工作人员”身份后进入 `/ops/*` 管理界面。
 - 历史 `/staff/login` 和 `/auth/login` 链接只做兼容跳转，不再提供独立登录页。
 - 登录后的用户门户和工作人员管理台右上角都提供一致位置的“门户首页 / 切换身份”操作。
 
-## 意图路由与无关问题处理
+## 请求路由与风险控制
 
-QA 入口现在先经过 `intent_router` subagent，再决定是否进入 RAG 和后续运维 workflow。这个实现迁移的是 Rasa `out_of_scope/fallback` 与 Haystack `ConditionalRouter` 的工程范式，而不是直接引入它们的 runtime：
+问答入口先经过 `intent_router`，再决定是否进入 RAG、subagent 编排和受控处理流程：
 
-- `greeting`、`thanks`、`goodbye`、`capability`、`low_information`、`out_of_scope` 会直接返回短答案，不触发 embedding/RAG、ticket draft 或 subagent 审阅。
-- `ops_support` 会进入 FAISS/Qwen3-Embedding hybrid RAG，再由 supervisor、risk_guardian、ops_employee、knowledge_curator、evaluator 编排。
-- `controlled_operation` 会继续进入受控风险链路，只允许流程指导和转人工，不允许直接执行账号、权限、生产、数据库、删除、提权或绕过审批动作。
-- 默认使用确定性规则，保证离线测试和演示稳定；`OPS_ENABLE_INTENT_ROUTER_LLM=true` 后，本地 Qwen 只在规则不确定时输出 JSON 路由建议，确定性安全门控仍是最终权威。
+- 问候、感谢、低信息和非运维问题直接返回范围提示，不触发 RAG 或工单草稿。
+- 运维支持类问题进入 FAISS/Qwen3-Embedding hybrid RAG，并由多角色链路完成判断、回答和知识沉淀建议。
+- 账号、权限、生产、数据库、删除、提权、绕过审批等高风险请求进入受控流程，只提供流程说明和人工协同入口。
+- 默认使用确定性路由和安全门控；`OPS_ENABLE_INTENT_ROUTER_LLM=true` 时，本地 Qwen 只提供 JSON 路由建议，不覆盖后端 RBAC、风险规则和审计要求。
 
-这里的 “training” 不是训练一个 agent 记忆，也不是把 Qwen base model 重新训练一遍。Rasa 类系统通常是用真实会话样本训练一个较小的 intent/entity 分类器，并用 fallback policy 处理低置信度输入；Haystack ConditionalRouter 则是按条件把请求分到不同 pipeline。项目当前采用工程迁移版：
+处理链路：
 
 ```text
 user input
@@ -156,13 +155,6 @@ user input
   -> Qwen base model: grounded answer or structured subagent review
   -> deterministic risk gate / RBAC / audit
 ```
-
-因此继续部署同一个 Qwen base model 就可以：路由层负责“该不该让它回答”，RAG/FAISS 负责“可引用知识 memory”，Qwen 负责“基于证据生成回答或 JSON 审阅”。后续如果积累了足够真实会话，可以把 `intent_router` 的规则升级为本地轻量分类器或 LoRA/embedding selector，但不建议一开始就微调 base model。
-
-对应文件：
-
-- `backend/app/services/intent_router_service.py`
-- `backend/app/agents/intent_router/prompt.md`
 
 ## GPU 与显存参数
 
@@ -224,7 +216,7 @@ NCCL_NET=Socket
 | `VLLM_CUDA_VISIBLE_DEVICES` | 继承 `CUDA_VISIBLE_DEVICES` | 指定 vLLM/base model GPU；例如 `0,1` |
 | `OPS_EMBEDDING_CUDA_VISIBLE_DEVICES` | 继承 vLLM GPU | 指定后端 embedding model GPU；例如 `2` |
 | `VLLM_GPU_MEMORY_UTILIZATION` | 自动估算 | vLLM 显存利用率；未设置时按模型规模、上下文和 TP 数估算 |
-| `OPS_CORS_ORIGINS` | `http://127.0.0.1:5666,http://localhost:5666` | 允许访问后端 API 的前端来源，生产环境不要设为 `*` |
+| `OPS_CORS_ORIGINS` | 开发默认前端来源 | 允许访问后端 API 的前端来源，生产环境必须设置为实际域名且不要设为 `*` |
 | `OPS_APP_VERSION` | `1.0.0-demo` | 后端健康检查和系统信息展示的交付版本号 |
 | `VLLM_MAX_MODEL_LEN` | `40960` | vLLM 最大上下文长度 |
 | `VLLM_TENSOR_PARALLEL_SIZE` | vLLM GPU 数量 | vLLM tensor parallel 大小；`VLLM_CUDA_VISIBLE_DEVICES=0,1` 时默认 2 |
@@ -249,16 +241,16 @@ NCCL_NET=Socket
 | `OPS_INTENT_ROUTER_LLM_MIN_CONFIDENCE` | `0.72` | intent router LLM 建议的最低采纳置信度，低于该值时回到确定性路由 |
 | `OPS_ENVIRONMENT` | `development` | 运行环境；设为 `production` 时启用安全配置校验 |
 | `OPS_JWT_SECRET` | 开发默认值 | JWT 签名密钥；生产环境必须设置为非默认且不少于 32 字符 |
-| `OPS_SEED_DEMO_ACCOUNTS` | `true` | 是否写入内置体验账号；生产环境必须设为 `false` |
+| `OPS_SEED_DEMO_ACCOUNTS` | `true` | 是否写入内置样例账号；生产环境必须设为 `false` |
 | `OPS_ADMIN_PASSWORD` | 无 | `scripts/create_admin.py` 非交互模式读取的管理员初始密码 |
 | `BACKEND_PORT` | `8010` | 后端端口 |
 | `FRONTEND_PORT` | `5666` | 前端端口 |
 
 配置样例见 `.env.example`。生产部署优先使用 `scripts/start_deploy.sh`，启动前按实际机器设置 base model 和 embedding model 使用的显卡。
 
-## 体验账号
+## 内置账号
 
-以下账号只用于课程演示和本地开发。生产部署请设置 `OPS_ENVIRONMENT=production`、配置强随机 `OPS_JWT_SECRET`，并设置 `OPS_SEED_DEMO_ACCOUNTS=false`。
+以下账号仅用于本地验证。生产部署请设置 `OPS_ENVIRONMENT=production`、配置强随机 `OPS_JWT_SECRET`，并设置 `OPS_SEED_DEMO_ACCOUNTS=false`。
 
 | 角色 | 账号 | 密码 |
 | --- | --- | --- |
@@ -267,12 +259,12 @@ NCCL_NET=Socket
 | 普通用户 | `user` | `user123` |
 | 审计员 | `auditor` | `audit123` |
 
-入口建议：
+角色入口：
 
-- 普通用户：打开 `/portal`，使用 `user / user123`。
-- 工作人员：打开 `/portal` 并选择“工作人员”，使用 `admin / admin123`、`ops / ops123` 或 `auditor / audit123`。
+- 普通用户：进入 `/portal`，使用 `user / user123`。
+- 工作人员：进入 `/portal` 并选择“工作人员”，使用 `admin / admin123`、`ops / ops123` 或 `auditor / audit123`。
 
-关闭内置体验账号 seed 后，可用离线脚本创建第一个生产管理员：
+关闭内置样例账号 seed 后，可用离线脚本创建第一个生产管理员：
 
 ```bash
 OPS_ENVIRONMENT=production \
@@ -314,7 +306,7 @@ python scripts/package_check.py
 alembic upgrade head
 ```
 
-旧演示库如果已经由 `init_db()` 创建过完整表结构，可评估后执行：
+既有数据库如果已经由 `init_db()` 创建过完整表结构，可评估后执行：
 
 ```bash
 alembic stamp head
@@ -340,8 +332,6 @@ python scripts/run_acceptance.py
 - `scripts/run_acceptance.py`：服务启动后的一键验收检查。
 - `.env.example`：公开配置样例；真实 `.env`、模型权重、数据库、日志和内部任务文档不进入 Git。
 
-## qwen-agent 说明
+## Agent 扩展边界
 
-项目已记录 qwen-agent 作为后续 Agent Workflow 能力的依赖。当前主问答链路是 RAG + vLLM；后续接入 qwen-agent 时，应按 ReAct loop 设计，并且工具必须走受控后端 API、RBAC 和审计日志，不能让 Agent 直接执行账号冻结、解冻或权限变更等高风险操作。
-
-qwen-agent 官方仓库：https://github.com/QwenLM/Qwen-Agent
+当前主链路为 RAG + vLLM + 受控 subagent 编排。后续扩展 ReAct 或 qwen-agent 工作流时，工具调用仍必须经过后端 API、RBAC 和审计日志，不允许模型直接执行账号冻结、解冻、权限变更、生产变更等高风险操作。
