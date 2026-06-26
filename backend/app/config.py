@@ -9,7 +9,7 @@ PRODUCTION_ENVIRONMENTS = {"prod", "production", "staging"}
 
 class Settings(BaseSettings):
     app_name: str = "运维数字员工系统"
-    app_version: str = "1.0.0-demo"
+    app_version: str = "1.0.0"
     api_prefix: str = "/api"
     database_url: str = "sqlite:///backend/data/app.db"
     environment: str = "development"
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     vllm_base_url: str = "http://127.0.0.1:8000/v1"
     vllm_model_name: str = "qwen3-1.7b"
     enable_thinking: bool = False
-    enable_agent_llm: bool = False
+    enable_agent_llm: bool = True
     agent_llm_parallelism: int = 5
     agent_llm_timeout_seconds: int = 45
     enable_intent_router_llm: bool = False

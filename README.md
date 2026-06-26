@@ -34,9 +34,9 @@ software/
 │       └── services/
 ├── frontend/                # Vue Vben Admin 前端
 ├── models/qwen3-1.7b         # 本地模型目录
-├── scripts/start_all.sh      # 一键启动脚本
+├── scripts/start_all.sh      # 启动脚本
 ├── scripts/stop_all.sh       # 停止脚本
-├── scripts/package_check.py   # 离线交付包装检查
+├── scripts/package_check.py   # 离线检查脚本
 └── requirements-minimal.txt  # Python 最小依赖
 ```
 
@@ -79,7 +79,7 @@ pnpm --version
 
 ### 4. 安装前端依赖
 
-首次运行可交给一键脚本安装，也可以手动安装：
+首次运行可交给启动脚本安装，也可以手动安装：
 
 ```bash
 cd frontend
@@ -89,19 +89,20 @@ cd ..
 
 ## 启动
 
-开发调试入口：
+统一启动入口：
 
 ```bash
-./scripts/start_all.sh
+./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
 ```
 
-交付部署入口：
+这个命令会依次启动 vLLM、后端和前端。启动前会停止本项目此前启动的进程，释放对应端口，并按模型规模和 GPU 数量自动估算 vLLM 显存占用率。默认启用真实 subagent LLM 审阅。
+
+常用可选参数：
 
 ```bash
-./scripts/start_deploy.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
+./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2 --install-frontend
+./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2 --no-frontend
 ```
-
-`start_deploy.sh` 默认启用真实 subagent LLM 审阅，并透传 `--no-frontend`、`--install-frontend` 等底层启动参数。
 
 默认端口：
 
@@ -109,32 +110,19 @@ cd ..
 - 后端：`BACKEND_PORT=8010`
 - vLLM：`OPS_VLLM_PORT=8000`
 
-首次启动并安装前端依赖：
-
-```bash
-./scripts/start_all.sh --install-frontend
-```
-
-只启动 vLLM + 后端：
-
-```bash
-./scripts/start_all.sh --no-frontend
-```
-
 停止服务：
 
 ```bash
 ./scripts/stop_all.sh
 ```
 
-启动脚本统一写入 `.run/frontend.pid`、`.run/backend.pid`、`.run/vllm.pid`；停止脚本也会兼容清理历史的 `*-local.pid`/`*-portal.pid`，并按 `FRONTEND_PORT`、`BACKEND_PORT`、`OPS_VLLM_PORT` 检查和释放本项目占用的端口。
+启动脚本统一写入 `.run/frontend.pid`、`.run/backend.pid`、`.run/vllm.pid`；停止脚本按 `FRONTEND_PORT`、`BACKEND_PORT`、`OPS_VLLM_PORT` 检查和释放本项目占用的端口。
 
 前端入口按角色组织：
 
 - `/` 和 `/portal` 进入用户服务门户。
 - `/portal` 提供“用户 / 工作人员”两种身份入口；普通用户登录后只展示数字员工咨询、在线记录提交和本人处理进度。
 - 运维、管理员和审计员在 `/portal` 选择“工作人员”身份后进入 `/ops/*` 管理界面。
-- 历史 `/staff/login` 和 `/auth/login` 链接只做兼容跳转，不再提供独立登录页。
 - 登录后的用户门户和工作人员管理台右上角都提供一致位置的“门户首页 / 切换身份”操作。
 
 ## 请求路由与风险控制
@@ -158,41 +146,25 @@ user input
 
 ## GPU 与显存参数
 
-默认兼容 `CUDA_VISIBLE_DEVICES`，它现在表示 base model/vLLM 使用的 GPU。推荐显式区分 base model 和 embedding model：
+启动时显式区分 base model 和 embedding model 使用的 GPU：
 
 ```bash
-VLLM_CUDA_VISIBLE_DEVICES=0,1 \
-OPS_EMBEDDING_CUDA_VISIBLE_DEVICES=2 \
-./scripts/start_all.sh
+./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
 ```
 
 上面表示：
 
 - Qwen base model 由 vLLM 启动在 GPU 0、1，并自动设置 `VLLM_TENSOR_PARALLEL_SIZE=2`。
-- Qwen3-Embedding 后端进程只看到 GPU 2；`OPS_EMBEDDING_DEVICE=auto` 即会加载到这张卡上。
-
-也可以用命令行参数指定：
-
-```bash
-./scripts/start_all.sh --vllm-cuda-devices 0,1 --embedding-cuda-devices 2
-```
-
-如果继续使用旧写法，下面仍然表示 vLLM/base model 用 GPU 0、1：
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 OPS_EMBEDDING_CUDA_VISIBLE_DEVICES=2 ./scripts/start_all.sh
-```
+- Qwen3-Embedding 后端进程只看到 GPU 2；`OPS_EMBEDDING_DEVICE=auto` 会加载到这张卡上。
 
 `VLLM_GPU_MEMORY_UTILIZATION` 未设置时，启动脚本会从 `OPS_MODEL_PATH` 解析模型规模，并结合 `VLLM_MAX_MODEL_LEN`、tensor parallel 数自动估算占用率。当前 `models/qwen3-1.7b`、`VLLM_MAX_MODEL_LEN=40960`、两张卡时会选择约 `0.62`。如果你手动设置 `VLLM_GPU_MEMORY_UTILIZATION`，脚本会完全使用你的值。
 
 显存紧张时可降低上下文长度或手动降低 vLLM 显存比例：
 
 ```bash
-VLLM_CUDA_VISIBLE_DEVICES=0,1 \
-OPS_EMBEDDING_CUDA_VISIBLE_DEVICES=2 \
 VLLM_MAX_MODEL_LEN=8192 \
 VLLM_GPU_MEMORY_UTILIZATION=0.45 \
-./scripts/start_all.sh
+./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
 ```
 
 脚本启动前会检查 vLLM 指定 GPU 的空闲显存，不足会提前退出并提示换卡或降低参数。embedding GPU 由后端进程按需加载，不参与 vLLM 显存预占用。
@@ -212,16 +184,15 @@ NCCL_NET=Socket
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CUDA_VISIBLE_DEVICES` | `0` | 兼容入口：指定 vLLM/base model GPU |
-| `VLLM_CUDA_VISIBLE_DEVICES` | 继承 `CUDA_VISIBLE_DEVICES` | 指定 vLLM/base model GPU；例如 `0,1` |
+| `OPS_BASE_CUDA_VISIBLE_DEVICES` | `0` | 指定 vLLM/base model GPU；例如 `0,1` |
 | `OPS_EMBEDDING_CUDA_VISIBLE_DEVICES` | 继承 vLLM GPU | 指定后端 embedding model GPU；例如 `2` |
 | `VLLM_GPU_MEMORY_UTILIZATION` | 自动估算 | vLLM 显存利用率；未设置时按模型规模、上下文和 TP 数估算 |
 | `OPS_CORS_ORIGINS` | 开发默认前端来源 | 允许访问后端 API 的前端来源，生产环境必须设置为实际域名且不要设为 `*` |
-| `OPS_APP_VERSION` | `1.0.0-demo` | 后端健康检查和系统信息展示的交付版本号 |
+| `OPS_APP_VERSION` | `1.0.0` | 后端健康检查和系统信息展示版本号 |
 | `VLLM_MAX_MODEL_LEN` | `40960` | vLLM 最大上下文长度 |
-| `VLLM_TENSOR_PARALLEL_SIZE` | vLLM GPU 数量 | vLLM tensor parallel 大小；`VLLM_CUDA_VISIBLE_DEVICES=0,1` 时默认 2 |
-| `VLLM_MAX_NUM_SEQS` | 未设置 | vLLM 最大并发序列数；启用多 subagent 并行审阅时可设为 16 |
-| `VLLM_MAX_NUM_BATCHED_TOKENS` | 未设置 | vLLM 每批 token 上限；小模型高吞吐可尝试 8192/16384 |
+| `VLLM_TENSOR_PARALLEL_SIZE` | vLLM GPU 数量 | vLLM tensor parallel 大小；base GPU 为 `0,1` 时默认 2 |
+| `VLLM_MAX_NUM_SEQS` | 自动估算 | vLLM 最大并发序列数；按 base GPU 数量设置保守默认值 |
+| `VLLM_MAX_NUM_BATCHED_TOKENS` | 自动估算 | vLLM 每批 token 上限；按 base GPU 数量设置保守默认值 |
 | `NCCL_IB_DISABLE` | `1` | 单机多卡默认关闭 IB，避免 NCCL net plugin 初始化崩溃 |
 | `NCCL_NET` | `Socket` | 单机多卡默认使用 socket bootstrap |
 | `OPS_MODEL_PATH` | `models/qwen3-1.7b` | 本地模型路径 |
@@ -234,7 +205,7 @@ NCCL_NET=Socket
 | `OPS_EMBEDDING_DIMENSION` | `1024` | Qwen3-Embedding 输出维度，可按 MRL 截断为 32-1024 |
 | `OPS_EMBEDDING_INDEX_DIR` | `backend/data/vector_index` | 本地 embedding index 持久化目录，知识或模型配置变化时自动重建 |
 | `OPS_EMBEDDING_INDEX_BACKEND` | `auto` | 向量索引后端；`auto` 使用 FAISS + numpy 持久化，未安装 FAISS 时降级 numpy；也可设为 `numpy` |
-| `OPS_ENABLE_AGENT_LLM` | `false` | 是否启用每个 subagent 的真实 Qwen 结构化审阅；关闭时使用确定性编排 |
+| `OPS_ENABLE_AGENT_LLM` | `true` | 是否启用每个 subagent 的真实 Qwen 结构化审阅 |
 | `OPS_AGENT_LLM_PARALLELISM` | `5` | subagent LLM 审阅并行度，默认同时审阅 5 个角色 |
 | `OPS_AGENT_LLM_TIMEOUT_SECONDS` | `45` | subagent LLM 审阅调用超时时间 |
 | `OPS_ENABLE_INTENT_ROUTER_LLM` | `false` | 是否启用本地 Qwen 对边界输入做 JSON 意图路由建议；默认关闭，规则路由仍会处理常见问候、低信息、无关和高风险输入 |
@@ -246,7 +217,7 @@ NCCL_NET=Socket
 | `BACKEND_PORT` | `8010` | 后端端口 |
 | `FRONTEND_PORT` | `5666` | 前端端口 |
 
-配置样例见 `.env.example`。生产部署优先使用 `scripts/start_deploy.sh`，启动前按实际机器设置 base model 和 embedding model 使用的显卡。
+配置样例见 `.env.example`。启动前按实际机器设置 base model 和 embedding model 使用的显卡。
 
 ## 内置账号
 
@@ -283,9 +254,9 @@ python scripts/check_dependencies.py
 
 如果缺少依赖，按提示安装即可。项目不绑定固定 conda 环境名；只要求在同一个已激活环境中具备 Python、vLLM、Node.js 和 pnpm。
 
-## 系统健康与包装检查
+## 系统健康与检查
 
-离线交付包检查不需要启动后端或 GPU：
+离线检查不需要启动后端或 GPU：
 
 ```bash
 python scripts/package_check.py
@@ -298,38 +269,33 @@ python scripts/package_check.py
 - `/api/ready?include_llm=true&require_llm=true`：完整链路就绪检查，额外要求 vLLM 可用。
 - `/api/system/info`：登录后查看系统版本、前端包、数据库类型、模型路径和功能开关，不返回密钥。
 
-## 数据库迁移
+## 数据库初始化
 
-数据库迁移已建立 Alembic baseline，新部署可运行：
+首次部署或版本升级后执行：
 
 ```bash
 alembic upgrade head
 ```
 
-既有数据库如果已经由 `init_db()` 创建过完整表结构，可评估后执行：
+密码使用 Argon2id 存储。
+
+## 提交检查
+
+提交前先执行离线检查。服务启动后再执行运行检查。
 
 ```bash
-alembic stamp head
-```
-
-密码存储已从单次 SHA-256 升级为 Argon2id；旧 SHA-256 哈希仍可登录，登录成功后会自动升级。
-
-## 交付前验收
-
-服务启动后可运行一键验收脚本：
-
-```bash
+python scripts/package_check.py
 python scripts/run_acceptance.py
 ```
 
-该脚本会检查后端健康、后端就绪、vLLM 就绪、RAG smoke test、知识敏感信息检查和审计 CSV 导出。若刚更新过代码，请先重启后端。
+`package_check.py` 不要求服务运行；`run_acceptance.py` 会检查后端健康、后端就绪、vLLM 就绪、RAG smoke test、知识敏感信息检查和审计 CSV 导出。
 
-## 交付文件说明
+## 文件说明
 
-- `scripts/start_deploy.sh`：正式启动入口，部署人只需要指定 base model 和 embedding model 使用的显卡。
-- `scripts/start_all.sh` / `scripts/stop_all.sh`：底层启动与停止脚本。
-- `scripts/package_check.py`：离线包装检查，提交或部署前先运行。
-- `scripts/run_acceptance.py`：服务启动后的一键验收检查。
+- `scripts/start_all.sh`：统一启动入口，部署人只需要指定 base model 和 embedding model 使用的显卡。
+- `scripts/stop_all.sh`：停止本项目启动的前端、后端和 vLLM 进程。
+- `scripts/package_check.py`：离线检查，提交或部署前先运行。
+- `scripts/run_acceptance.py`：服务启动后的运行检查。
 - `.env.example`：公开配置样例；真实 `.env`、模型权重、数据库、日志和内部任务文档不进入 Git。
 
 ## Agent 扩展边界

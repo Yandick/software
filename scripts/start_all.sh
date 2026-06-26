@@ -40,8 +40,8 @@ SERVED_MODEL_NAME="${OPS_VLLM_MODEL_NAME:-qwen3-1.7b}"
 VLLM_REASONING_PARSER="${VLLM_REASONING_PARSER:-qwen3}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 PNPM_VERSION="${PNPM_VERSION:-10.33.0}"
-VLLM_CUDA_DEVICES="${VLLM_CUDA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}"
-EMBEDDING_CUDA_DEVICES="${OPS_EMBEDDING_CUDA_VISIBLE_DEVICES:-${EMBEDDING_CUDA_VISIBLE_DEVICES:-$VLLM_CUDA_DEVICES}}"
+BASE_CUDA_DEVICES="${OPS_BASE_CUDA_VISIBLE_DEVICES:-0}"
+EMBEDDING_CUDA_DEVICES="${OPS_EMBEDDING_CUDA_VISIBLE_DEVICES:-$BASE_CUDA_DEVICES}"
 NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
 NCCL_NET="${NCCL_NET:-Socket}"
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
@@ -68,21 +68,19 @@ LEGACY_PID_FILES=(
 
 usage() {
   cat <<USAGE
-Usage: scripts/start_all.sh [options]
+Usage: scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2 [options]
 
 Options:
   --no-frontend         只启动 vLLM + 后端
   --install-frontend    启动前执行 pnpm install
-  --cuda-devices VALUE  设置 vLLM/base model 使用的 GPU，例如 0、1、0,1；默认读取 CUDA_VISIBLE_DEVICES 或 0
-  --vllm-cuda-devices VALUE       设置 vLLM/base model 使用的 GPU
+  --base-cuda-devices VALUE       设置 vLLM/base model 使用的 GPU，例如 0、1、0,1
   --embedding-cuda-devices VALUE  设置后端 embedding model 使用的 GPU
   -h, --help            显示帮助
 
 Env:
   BACKEND_PORT          后端端口，默认 8010
   FRONTEND_PORT         前端端口，默认 5666
-  CUDA_VISIBLE_DEVICES  兼容入口：指定 vLLM/base model GPU；脚本默认设为 0
-  VLLM_CUDA_VISIBLE_DEVICES  指定 vLLM/base model GPU，优先于 CUDA_VISIBLE_DEVICES
+  OPS_BASE_CUDA_VISIBLE_DEVICES   指定 vLLM/base model GPU
   OPS_EMBEDDING_CUDA_VISIBLE_DEVICES  指定 embedding model GPU；设置后后端只看到这些 GPU
   OPS_EMBEDDING_DEVICE  embedding torch device；默认 auto，配合 OPS_EMBEDDING_CUDA_VISIBLE_DEVICES 时可保持 auto
   OPS_MODEL_PATH        模型路径，默认 models/qwen3-1.7b
@@ -92,11 +90,11 @@ Env:
   VLLM_GPU_MEMORY_UTILIZATION  vLLM 显存利用率；未设置时按模型规模和上下文自动估算
   VLLM_MAX_MODEL_LEN    vLLM 最大上下文长度，默认 40960；显存紧张可设为 8192/16384
   VLLM_TENSOR_PARALLEL_SIZE    vLLM tensor parallel 大小；默认按 vLLM GPU 数量推导
-  VLLM_MAX_NUM_SEQS     vLLM 最大并发序列数；需要时设置，例如 16
-  VLLM_MAX_NUM_BATCHED_TOKENS  vLLM 每批 token 上限；需要时设置，例如 8192
+  VLLM_MAX_NUM_SEQS     vLLM 最大并发序列数；未设置时按 base GPU 数量估算
+  VLLM_MAX_NUM_BATCHED_TOKENS  vLLM 每批 token 上限；未设置时按 base GPU 数量估算
   NCCL_IB_DISABLE      默认 1；单机多卡默认关闭 IB，避免 NCCL net plugin 在无 IB 环境崩溃
   NCCL_NET             默认 Socket；单机多卡默认使用 socket bootstrap
-  OPS_ENABLE_AGENT_LLM  是否启用真实 subagent LLM 审阅；默认 false
+  OPS_ENABLE_AGENT_LLM  是否启用真实 subagent LLM 审阅；默认 true
   OPS_AGENT_LLM_PARALLELISM  subagent LLM 并行审阅数量；默认 5
 USAGE
 }
@@ -105,10 +103,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-frontend) START_FRONTEND=0 ;;
     --install-frontend) INSTALL_FRONTEND=1 ;;
-    --cuda-devices|--vllm-cuda-devices)
+    --base-cuda-devices)
       shift
-      if [[ $# -eq 0 ]]; then echo "--cuda-devices requires a value"; exit 2; fi
-      VLLM_CUDA_DEVICES="$1"
+      if [[ $# -eq 0 ]]; then echo "base cuda devices option requires a value"; exit 2; fi
+      BASE_CUDA_DEVICES="$1"
       ;;
     --embedding-cuda-devices)
       shift
@@ -421,8 +419,8 @@ PY2
     log "$label GPU $gpu_id memory: total=${total_mib}MiB used=${used_mib}MiB free=${free_mib}MiB; target=${required_mib}MiB"
     if (( free_mib < required_mib )); then
       log "GPU $gpu_id 空闲显存不足以按 utilization=$utilization 启动 $label。"
-      log "请先运行 nvidia-smi 选择空闲 GPU，例如：VLLM_CUDA_VISIBLE_DEVICES=0,1 OPS_EMBEDDING_CUDA_VISIBLE_DEVICES=2 ./scripts/start_all.sh"
-      log "如果必须使用当前 GPU，可降低上下文或显存比例，例如：VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 VLLM_CUDA_VISIBLE_DEVICES=$gpu_id ./scripts/start_all.sh"
+      log "请先运行 nvidia-smi 选择空闲 GPU，例如：./scripts/start_all.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2"
+      log "如果必须使用当前 GPU，可降低上下文或显存比例，例如：VLLM_MAX_MODEL_LEN=8192 VLLM_GPU_MEMORY_UTILIZATION=0.35 ./scripts/start_all.sh --base-cuda-devices $gpu_id --embedding-cuda-devices $EMBEDDING_CUDA_DEVICES"
       exit 1
     fi
   done < <(visible_cuda_devices "$cuda_devices")
@@ -444,7 +442,20 @@ fi
 log "project root: $ROOT_DIR"
 log "python: $(command -v "$PYTHON_BIN")"
 log "node: $([[ "$START_FRONTEND" == 1 ]] && command -v node || echo 'not required')"
-VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-$(count_cuda_devices "$VLLM_CUDA_DEVICES")}"
+VLLM_TENSOR_PARALLEL_SIZE="${VLLM_TENSOR_PARALLEL_SIZE:-$(count_cuda_devices "$BASE_CUDA_DEVICES")}"
+BASE_GPU_COUNT="$(count_cuda_devices "$BASE_CUDA_DEVICES")"
+if [[ "${BASE_GPU_COUNT:-1}" -le 1 ]]; then
+  DEFAULT_VLLM_MAX_NUM_SEQS=8
+  DEFAULT_VLLM_MAX_NUM_BATCHED_TOKENS=4096
+else
+  DEFAULT_VLLM_MAX_NUM_SEQS=16
+  DEFAULT_VLLM_MAX_NUM_BATCHED_TOKENS=8192
+fi
+export OPS_ENABLE_AGENT_LLM="${OPS_ENABLE_AGENT_LLM:-true}"
+export OPS_AGENT_LLM_PARALLELISM="${OPS_AGENT_LLM_PARALLELISM:-5}"
+export OPS_AGENT_LLM_TIMEOUT_SECONDS="${OPS_AGENT_LLM_TIMEOUT_SECONDS:-45}"
+VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS:-$DEFAULT_VLLM_MAX_NUM_SEQS}"
+VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-$DEFAULT_VLLM_MAX_NUM_BATCHED_TOKENS}"
 if [[ -z "$VLLM_GPU_MEMORY_UTILIZATION" ]]; then
   MODEL_PARAMS_B="$(model_params_billion)"
   VLLM_GPU_MEMORY_UTILIZATION="$(auto_vllm_gpu_memory_utilization "$MODEL_PARAMS_B" "$VLLM_MAX_MODEL_LEN" "$VLLM_TENSOR_PARALLEL_SIZE")"
@@ -452,21 +463,23 @@ if [[ -z "$VLLM_GPU_MEMORY_UTILIZATION" ]]; then
 else
   VLLM_GPU_MEMORY_UTILIZATION_SOURCE="manual"
 fi
-log "vLLM CUDA_VISIBLE_DEVICES=$VLLM_CUDA_DEVICES"
+log "vLLM CUDA_VISIBLE_DEVICES=$BASE_CUDA_DEVICES"
 log "backend/embedding CUDA_VISIBLE_DEVICES=$EMBEDDING_CUDA_DEVICES"
+log "subagent LLM: OPS_ENABLE_AGENT_LLM=$OPS_ENABLE_AGENT_LLM parallelism=$OPS_AGENT_LLM_PARALLELISM"
 log "vLLM memory config: gpu_memory_utilization=$VLLM_GPU_MEMORY_UTILIZATION [$VLLM_GPU_MEMORY_UTILIZATION_SOURCE], max_model_len=$VLLM_MAX_MODEL_LEN, tensor_parallel_size=$VLLM_TENSOR_PARALLEL_SIZE"
+log "vLLM concurrency: max_num_seqs=$VLLM_MAX_NUM_SEQS, max_num_batched_tokens=$VLLM_MAX_NUM_BATCHED_TOKENS"
 log "NCCL config for vLLM: NCCL_IB_DISABLE=$NCCL_IB_DISABLE, NCCL_NET=$NCCL_NET, NCCL_DEBUG=$NCCL_DEBUG"
 
-stop_known_pid_files
+log "stopping existing project processes..."
+BACKEND_PORT="$BACKEND_PORT" FRONTEND_PORT="$FRONTEND_PORT" OPS_VLLM_PORT="$VLLM_PORT" "$ROOT_DIR/scripts/stop_all.sh"
 ensure_port_available "$BACKEND_PORT" backend
 if [[ "$START_FRONTEND" == 1 ]]; then ensure_port_available "$FRONTEND_PORT" frontend; fi
 ensure_port_available "$VLLM_PORT" vLLM
-check_gpu_memory "$VLLM_CUDA_DEVICES" "$VLLM_GPU_MEMORY_UTILIZATION" "vLLM"
+check_gpu_memory "$BASE_CUDA_DEVICES" "$VLLM_GPU_MEMORY_UTILIZATION" "vLLM"
 
 log "starting vLLM for Qwen3: $MODEL_PATH"
-export CUDA_VISIBLE_DEVICES="$VLLM_CUDA_DEVICES"
+export CUDA_VISIBLE_DEVICES="$BASE_CUDA_DEVICES"
 export NCCL_IB_DISABLE NCCL_NET NCCL_DEBUG
-unset VLLM_CUDA_VISIBLE_DEVICES
 VLLM_ARGS=(
   -m vllm.entrypoints.openai.api_server
   --model "$MODEL_PATH" \
