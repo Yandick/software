@@ -3,7 +3,6 @@ import type { RouteRecordRaw } from 'vue-router';
 import { $t } from '#/locales';
 
 const BasicLayout = () => import('#/layouts/basic.vue');
-const AuthPageLayout = () => import('#/layouts/auth.vue');
 /** 全局404页面 */
 const fallbackNotFoundRoute: RouteRecordRaw = {
   component: () => import('#/views/_core/fallback/not-found.vue'),
@@ -36,19 +35,18 @@ const coreRoutes: RouteRecordRaw[] = [
     children: [],
   },
   {
-    component: AuthPageLayout,
     meta: {
       hideInTab: true,
       title: 'Staff Authentication',
     },
     name: 'StaffAuthentication',
     path: '/staff',
-    redirect: '/staff/login',
+    redirect: '/portal?identity=staff',
     children: [
       {
         name: 'StaffLogin',
         path: 'login',
-        component: () => import('#/views/_core/authentication/login.vue'),
+        redirect: '/portal?identity=staff',
         meta: {
           title: '工作人员登录',
         },
@@ -56,19 +54,18 @@ const coreRoutes: RouteRecordRaw[] = [
     ],
   },
   {
-    component: AuthPageLayout,
     meta: {
       hideInTab: true,
       title: 'Authentication',
     },
     name: 'Authentication',
     path: '/auth',
-    redirect: '/staff/login',
+    redirect: '/portal',
     children: [
       {
         name: 'Login',
         path: 'login',
-        redirect: '/staff/login',
+        redirect: '/portal',
         meta: {
           title: $t('page.auth.login'),
         },

@@ -435,10 +435,6 @@ export function handleIssue(id: number, solution: string) {
   return requestClient.post<IssueItem>(`/issues/${id}/handle`, { solution });
 }
 
-export function visitIssue(id: number, data: ApiPayload) {
-  return requestClient.post<IssueItem>(`/issues/${id}/visit`, data);
-}
-
 export function feedbackIssue(id: number, data: ApiPayload) {
   return requestClient.post<IssueItem>(`/issues/${id}/feedback`, data);
 }
@@ -505,6 +501,10 @@ export function updateKnowledge(id: number, data: ApiPayload) {
 
 export function changeKnowledgeStatus(id: number, status: string, reviewNote = '') {
   return requestClient.post<KnowledgeItem>(`/knowledge/${id}/status`, { review_note: reviewNote, status });
+}
+
+export function deleteKnowledge(id: number) {
+  return requestClient.delete<{ deleted: boolean; id: number; status: string; title: string }>(`/knowledge/${id}`);
 }
 
 export function checkKnowledgeSensitive(data: ApiPayload) {

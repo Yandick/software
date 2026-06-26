@@ -90,16 +90,24 @@ cd ..
 
 ## 启动项目
 
-在项目根目录执行：
+开发或本地调试时，在项目根目录执行：
 
 ```bash
 ./scripts/start_all.sh
 ```
 
+部署或答辩验收时，建议直接用部署脚本，只需要指定 base model 和 embedding model 的 GPU：
+
+```bash
+./scripts/start_deploy.sh --base-cuda-devices 0,1 --embedding-cuda-devices 2
+```
+
+这个入口默认会开启真实 subagent LLM 审阅，并保留 `--no-frontend`、`--install-frontend` 等 `start_all.sh` 参数透传。
+
 默认服务地址：
 
 - 用户服务门户：http://127.0.0.1:5666/portal
-- 工作人员管理台：http://127.0.0.1:5666/staff/login
+- 统一登录门户：http://127.0.0.1:5666/portal
 - 后端：http://127.0.0.1:8010/api/health
 - vLLM：http://127.0.0.1:8000/v1/models
 
@@ -127,8 +135,8 @@ cd ..
 
 - 访问 `http://127.0.0.1:5666/` 会进入面向业务用户的服务门户，而不是后台登录页。
 - `/portal` 提供“用户 / 工作人员”两种身份登录；普通用户登录后只看到数字员工咨询、在线记录提交和本人处理进度。
-- 运维、管理员和审计员可在 `/portal` 选择“工作人员”登录，也可以直接从 `/staff/login` 登录，进入 `/ops/*` 管理界面。
-- 工作人员如果从用户门户误登录，会自动进入管理台；普通用户如果从工作人员入口误登录，会回到服务门户。
+- 运维、管理员和审计员在 `/portal` 选择“工作人员”登录后进入 `/ops/*` 管理界面。
+- 历史 `/staff/login` 和 `/auth/login` 链接只做兼容跳转，不再提供独立登录页。
 - 登录后的用户门户和工作人员管理台右上角都提供一致位置的“门户首页 / 切换身份”操作。
 
 ## 意图路由与无关问题处理
@@ -263,7 +271,7 @@ NCCL_NET=Socket
 入口建议：
 
 - 普通用户：打开 `/portal`，使用 `user / user123`。
-- 工作人员：打开 `/staff/login`，使用 `admin / admin123`、`ops / ops123` 或 `auditor / audit123`。
+- 工作人员：打开 `/portal` 并选择“工作人员”，使用 `admin / admin123`、`ops / ops123` 或 `auditor / audit123`。
 
 关闭内置体验账号 seed 后，可用离线脚本创建第一个生产管理员：
 

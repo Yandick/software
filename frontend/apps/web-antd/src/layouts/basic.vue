@@ -10,7 +10,6 @@ import { preferences, usePreferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 
 import { useAuthStore } from '#/store';
-import LoginForm from '#/views/_core/authentication/login.vue';
 
 const userStore = useUserStore();
 const authStore = useAuthStore();
@@ -27,7 +26,7 @@ const userDescription = computed(() => userStore.userInfo?.username ?? '');
 const userTagText = computed(() => userStore.userInfo?.roles?.[0] ?? '');
 
 async function handleLogout() {
-  await authStore.logout(false, '/staff/login');
+  await authStore.logout(false, '/portal');
 }
 
 async function goPortal() {
@@ -115,7 +114,11 @@ watch(
         v-model:open="accessStore.loginExpired"
         :avatar
       >
-        <LoginForm />
+        <div class="login-expired-portal">
+          <strong>登录状态已过期</strong>
+          <span>请返回门户重新选择用户或工作人员身份。</span>
+          <button type="button" @click="returnPortalHome">返回门户登录</button>
+        </div>
       </AuthenticationLoginExpiredModal>
     </template>
     <template #lock-screen>
@@ -158,6 +161,34 @@ watch(
 .staff-identity-actions button.primary {
   background: #0f766e;
   color: #fff;
+}
+
+.login-expired-portal {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 0 2px;
+}
+
+.login-expired-portal strong {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.login-expired-portal span {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.login-expired-portal button {
+  background: #0f766e;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  min-height: 38px;
 }
 
 @media (max-width: 860px) {

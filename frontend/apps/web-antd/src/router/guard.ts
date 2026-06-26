@@ -10,7 +10,7 @@ import { useAuthStore } from '#/store';
 
 import { generateAccess } from './access';
 
-const STAFF_LOGIN_PATH = '/staff/login';
+const PORTAL_PATH = '/portal';
 
 /**
  * 通用守卫配置
@@ -54,10 +54,7 @@ function setupAccessGuard(router: Router) {
 
     // 基本路由，这些路由不需要进入权限拦截
     if (coreRouteNames.includes(to.name as string)) {
-      if (
-        (to.path === LOGIN_PATH || to.path === STAFF_LOGIN_PATH) &&
-        accessStore.accessToken
-      ) {
+      if (to.path === LOGIN_PATH && accessStore.accessToken) {
         return decodeURIComponent(
           (to.query?.redirect as string) ||
             userStore.userInfo?.homePath ||
@@ -76,16 +73,17 @@ function setupAccessGuard(router: Router) {
 
       // 没有访问权限，跳转登录页面
       if (to.fullPath !== LOGIN_PATH) {
-        const loginPath = to.path.startsWith('/ops')
-          ? STAFF_LOGIN_PATH
-          : LOGIN_PATH;
+        const isStaffRoute = to.path.startsWith('/ops');
         return {
-          path: loginPath,
+          path: PORTAL_PATH,
           // 如不需要，直接删除 query
           query:
             to.fullPath === preferences.app.defaultHomePath
               ? {}
-              : { redirect: encodeURIComponent(to.fullPath) },
+              : {
+                  ...(isStaffRoute ? { identity: 'staff' } : {}),
+                  redirect: encodeURIComponent(to.fullPath),
+                },
           // 携带当前跳转的页面，登录后重新跳转该页面
           replace: true,
         };

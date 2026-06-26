@@ -379,14 +379,14 @@ def handle_issue(issue_id: int, data: IssueHandle, user: dict[str, Any]) -> dict
             raise HTTPException(status_code=400, detail="只有已受理、处理中或待用户补充的记录可以提交处理")
         accepted_at = row["accepted_at"] or now
         cur = conn.execute(
-            "update issues set solution=?,status='pending_visit',handled_by=?,accepted_at=?,handled_at=?,updated_at=? where id=?",
-            (data.solution, user["id"], accepted_at, now, now, issue_id),
+            "update issues set solution=?,status='closed',handled_by=?,accepted_at=?,handled_at=?,closed_at=?,updated_at=? where id=?",
+            (data.solution, user["id"], accepted_at, now, now, now, issue_id),
         )
         if cur.rowcount != 1:
             raise HTTPException(status_code=404, detail="在线记录不存在")
         issue_event(conn, issue_id, "handled", user, data.solution)
     audit("issue_handle", "issue", f"处理在线记录：{data.solution[:80]}", issue_id)
-    return {"id": issue_id, "status": "pending_visit", "status_label": ISSUE_STATUS_LABELS["pending_visit"], "solution": data.solution, "handled_at": now}
+    return {"id": issue_id, "status": "closed", "status_label": ISSUE_STATUS_LABELS["closed"], "solution": data.solution, "handled_at": now, "closed_at": now}
 
 
 def visit_issue(issue_id: int, data: IssueVisit, user: dict[str, Any]) -> dict[str, Any]:

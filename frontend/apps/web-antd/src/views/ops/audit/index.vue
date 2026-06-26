@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 
 import { exportAuditLogs, getAuditLogs, getStats } from '#/api/ops';
+import { useAutoRefresh } from '#/composables/use-auto-refresh';
 
 const stats = ref<any>({});
 const auditLogs = ref<any[]>([]);
@@ -58,6 +59,7 @@ const metricCards = computed(() => [
   { label: '已发布知识', value: stats.value.published_knowledge || 0, tone: 'green' },
   { label: '待审核知识', value: stats.value.pending_knowledge || 0, tone: 'orange' },
 ]);
+useAutoRefresh(load, 20000);
 
 async function load() {
   loading.value = true;
@@ -124,7 +126,7 @@ onMounted(load);
       </div>
       <div class="flex gap-2">
         <a-button :loading="exportLoading" @click="downloadAudit">导出 CSV</a-button>
-        <a-button :loading="loading" type="primary" @click="load">刷新数据</a-button>
+        <a-tag color="blue">自动刷新中</a-tag>
       </div>
     </div>
 

@@ -20,6 +20,7 @@ REQUIRED_FILES = [
     "frontend/package.json",
     "frontend/pnpm-lock.yaml",
     "scripts/start_all.sh",
+    "scripts/start_deploy.sh",
     "scripts/stop_all.sh",
     "scripts/run_acceptance.py",
 ]

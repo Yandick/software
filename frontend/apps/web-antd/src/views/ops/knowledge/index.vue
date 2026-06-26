@@ -10,11 +10,13 @@ import {
   changeKnowledgeStatus,
   checkKnowledgeDuplicate,
   checkKnowledgeSensitive,
+  deleteKnowledge,
   createKnowledge,
   listKnowledge,
   updateKnowledge,
   uploadKnowledgeDocument,
 } from '#/api/ops';
+import { useAutoRefresh } from '#/composables/use-auto-refresh';
 
 const userStore = useUserStore();
 const emptyForm = {
@@ -78,6 +80,7 @@ const statusOptions = [
   { color: 'green', label: '已发布', value: 'published' },
   { color: 'default', label: '已下线', value: 'offline' },
 ];
+useAutoRefresh(load, 30000);
 
 async function load() {
   loading.value = true;
@@ -299,6 +302,20 @@ function confirmStatus(record: any, status: string) {
       await load();
     },
     title: `确认将「${record.title}」设为${meta.label}？`,
+  });
+}
+
+function confirmDelete(record: any) {
+  Modal.confirm({
+    content: '删除后该知识条目会从知识库和检索结果中移除，且无法恢复。请确认这不是仍需保留的历史知识。',
+    okText: '确认删除',
+    okType: 'danger',
+    onOk: async () => {
+      await deleteKnowledge(record.id);
+      message.success('知识条目已删除');
+      await load();
+    },
+    title: `确认删除「${record.title}」？`,
   });
 }
 
@@ -537,7 +554,7 @@ onMounted(load);
             {{ item.label }}
           </a-select-option>
         </a-select>
-        <a-button :loading="loading" @click="load">刷新</a-button>
+        <a-tag color="blue">自动刷新中</a-tag>
       </div>
 
       <a-table :columns="columns" :data-source="rows" :loading="loading" row-key="id">
@@ -598,6 +615,9 @@ onMounted(load);
                 @click="confirmStatus(record, 'offline')"
               >
                 下线
+              </a-button>
+              <a-button v-if="canPublish" danger size="small" @click="confirmDelete(record)">
+                删除
               </a-button>
             </a-space>
           </template>

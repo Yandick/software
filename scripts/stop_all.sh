@@ -13,12 +13,37 @@ LEGACY_PID_FILES=(
   "$RUN_DIR/frontend-local.pid"
   "$RUN_DIR/backend-local.pid"
   "$RUN_DIR/vllm-local.pid"
+  "$RUN_DIR/frontend-auto-pipeline.pid"
+  "$RUN_DIR/backend-auto-pipeline.pid"
+  "$RUN_DIR/vllm-auto-pipeline.pid"
   "$RUN_DIR/frontend-portal.pid"
   "$RUN_DIR/backend-portal.pid"
   "$RUN_DIR/vllm-portal.pid"
 )
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
+
+kill_vllm_orphans() {
+  local pid
+  if ! command -v pgrep >/dev/null 2>&1; then
+    return 0
+  fi
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      log "stopping lingering vLLM worker pid=$pid"
+      kill -TERM "$pid" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -u "$USER" -f 'VLLM::Worker_TP[0-9]+' 2>/dev/null || true)
+  sleep 1
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      log "force stopping lingering vLLM worker pid=$pid"
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    fi
+  done < <(pgrep -u "$USER" -f 'VLLM::Worker_TP[0-9]+' 2>/dev/null || true)
+}
 
 pid_is_project_owned() {
   local pid="$1" cwd cmdline
@@ -116,6 +141,7 @@ main() {
   stop_project_port "$FRONTEND_PORT" frontend
   stop_project_port "$BACKEND_PORT" backend
   stop_project_port "$VLLM_PORT" vLLM
+  kill_vllm_orphans
 
   log "done"
 }

@@ -13,6 +13,7 @@ import {
   listAccountApprovals,
   listAccounts,
 } from '#/api/ops';
+import { useAutoRefresh } from '#/composables/use-auto-refresh';
 
 const userStore = useUserStore();
 const defaultAccountForm = () => ({
@@ -49,6 +50,7 @@ const heroMetrics = computed(() => [
   { label: '启用账号', value: rows.value.filter((item) => item.status === 'active').length },
   { label: '待审批', value: approvals.value.filter((item) => item.status === 'pending').length },
 ]);
+useAutoRefresh(load, 20000);
 
 const columns = [
   { title: '账号名', dataIndex: 'account_name' },
@@ -362,10 +364,10 @@ onMounted(load);
           placeholder="搜索账号名、负责人、部门、权限、风险或备注"
           @search="load"
         />
-        <a-button :loading="loading" @click="load">刷新</a-button>
         <a-button :disabled="!canExport" :loading="exportLoading" @click="downloadAccounts">
           导出 CSV
         </a-button>
+        <a-tag color="blue">自动刷新中</a-tag>
       </div>
 
       <a-table :columns="columns" :data-source="rows" :loading="loading" row-key="id" :scroll="{ x: 1200 }">
@@ -408,7 +410,7 @@ onMounted(load);
           <a-select-option value="rejected">已拒绝</a-select-option>
           <a-select-option value="">全部</a-select-option>
         </a-select>
-        <a-button :loading="approvalsLoading || loading" @click="load">刷新审批</a-button>
+        <a-tag color="blue">自动刷新中</a-tag>
       </div>
       <a-table :data-source="approvals" :loading="approvalsLoading || loading" row-key="id" :columns="[
         { title: '账号', dataIndex: 'account_name' },

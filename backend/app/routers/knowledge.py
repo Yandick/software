@@ -10,6 +10,7 @@ from ..security import current_user
 from ..services.agent_service import agent_service
 from ..services.knowledge_service import (
     change_knowledge_status as change_knowledge_status_record,
+    delete_knowledge as delete_knowledge_record,
     create_knowledge as create_knowledge_record,
     import_knowledge_document,
     list_knowledge as list_knowledge_rows,
@@ -94,3 +95,9 @@ def change_knowledge_status(
 ) -> dict[str, Any]:
     require_roles(user, {"admin"})
     return change_knowledge_status_record(item_id, data, user)
+
+
+@router.delete("/knowledge/{item_id}")
+def delete_knowledge(item_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    require_roles(user, {"admin"})
+    return delete_knowledge_record(item_id, user)

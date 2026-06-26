@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { IconifyIcon } from '@vben/icons';
@@ -22,6 +22,7 @@ import {
   suggestQuestions,
   uploadIssueAttachment,
 } from '#/api/ops';
+import { useAutoRefresh } from '#/composables/use-auto-refresh';
 import { useAuthStore } from '#/store';
 
 type ChatRole = 'assistant' | 'system' | 'user';
@@ -48,6 +49,7 @@ interface ChatMessage {
   riskLevel?: string;
   role: ChatRole;
   status?: string;
+  streaming?: boolean;
   text: string;
 }
 
@@ -106,7 +108,9 @@ const handoffForm = ref({
 });
 const chatBodyRef = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
+const autoScrollToBottom = ref(true);
 let suggestTimer: ReturnType<typeof setTimeout> | undefined;
+let answerTimerToken = 0;
 
 const quickActions = [
   {
@@ -223,7 +227,9 @@ const statItems = computed(() => [
 
 const visibleSuggestions = computed(() => suggestions.value.slice(0, 5));
 const visibleConversations = computed(() => conversations.value.slice(0, 6));
-const activeIssues = computed(() => issues.value.filter((item) => item.status !== 'closed').slice(0, 4));
+const activeIssues = computed(() =>
+  issues.value.filter((item) => !['closed', 'handled', 'pending_visit'].includes(item.status)).slice(0, 4),
+);
 const latestIssues = computed(() => issues.value.slice(0, 8));
 const isAuthenticated = computed(() => !!accessStore.accessToken && !!userStore.userInfo);
 const latestAssistant = computed(() => {
@@ -256,11 +262,80 @@ const loginModeMeta = computed(() => {
   };
 });
 
-async function scrollToBottom() {
+function getChatScrollMetrics() {
+  const el = chatBodyRef.value;
+  if (!el) {
+    return null;
+  }
+  return {
+    clientHeight: el.clientHeight,
+    scrollHeight: el.scrollHeight,
+    scrollTop: el.scrollTop,
+  };
+}
+
+function isNearBottom(threshold = 96) {
+  const metrics = getChatScrollMetrics();
+  if (!metrics) {
+    return true;
+  }
+  return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight <= threshold;
+}
+
+function handleChatScroll() {
+  autoScrollToBottom.value = isNearBottom();
+}
+
+function handleChatUserIntent() {
+  if (!isNearBottom(24)) {
+    autoScrollToBottom.value = false;
+  }
+}
+
+async function scrollToBottom(force = false) {
+  if (!force && !autoScrollToBottom.value) {
+    return;
+  }
   await nextTick();
   if (chatBodyRef.value) {
-    chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight;
+    chatBodyRef.value.scrollTo({
+      behavior: force ? 'smooth' : 'auto',
+      top: chatBodyRef.value.scrollHeight,
+    });
   }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function revealAssistantAnswer(message: ChatMessage, answer: string) {
+  const token = ++answerTimerToken;
+  const chars = Array.from(answer || '');
+  message.loading = false;
+  message.streaming = true;
+  message.text = '';
+  await scrollToBottom(true);
+  await sleep(240);
+
+  for (let index = 0; index < chars.length; index += 1) {
+    if (token !== answerTimerToken) {
+      return;
+    }
+    const current = chars[index] || '';
+    message.text += current;
+    const delay = /[。！？!?；;\n]/.test(current) ? 120 : /[，,、]/.test(current) ? 45 : 24;
+    if (autoScrollToBottom.value && (index % 3 === 0 || /[。！？!?；;\n，,、]/.test(current))) {
+      await scrollToBottom();
+    }
+    await sleep(delay);
+  }
+
+  if (token !== answerTimerToken) {
+    return;
+  }
+  message.streaming = false;
+  await scrollToBottom();
 }
 
 function nowText() {
@@ -296,13 +371,14 @@ function isLightweightAnswer(item: ChatMessage) {
 }
 
 function showAnswerTags(item: ChatMessage) {
-  return item.role === 'assistant' && !item.loading && !isLightweightAnswer(item);
+  return item.role === 'assistant' && !item.loading && !item.streaming && !isLightweightAnswer(item);
 }
 
 function showDecisionBox(item: ChatMessage) {
   return (
     item.role === 'assistant'
     && !item.loading
+    && !item.streaming
     && !isLightweightAnswer(item)
     && Boolean(item.missingFields?.length || item.handoffReasons?.length || item.clarificationQuestions?.length)
   );
@@ -352,6 +428,8 @@ function fillClarification(baseQuestion = '', clarification = '') {
 }
 
 function startNewConversation() {
+  answerTimerToken += 1;
+  autoScrollToBottom.value = true;
   conversationId.value = null;
   conversationTitle.value = '新会话';
   currentQuestion.value = '';
@@ -406,6 +484,13 @@ async function loadPortalData() {
   inputRef.value?.focus();
 }
 
+async function refreshPortalData() {
+  if (!isAuthenticated.value) {
+    return;
+  }
+  await Promise.all([loadStats(), loadLlmStatus(), loadConversations(), loadIssues()]);
+}
+
 async function loadSuggestions(keyword = question.value) {
   try {
     suggestions.value = await suggestQuestions(keyword.trim());
@@ -420,6 +505,8 @@ async function loadSuggestions(keyword = question.value) {
 }
 
 async function restoreConversation(id: number) {
+  answerTimerToken += 1;
+  autoScrollToBottom.value = true;
   restoringConversation.value = true;
   activeView.value = 'chat';
   try {
@@ -461,7 +548,7 @@ async function restoreConversation(id: number) {
     currentIssueDraft.value = lastAssistant?.issueDraft || null;
     needHuman.value = !!lastAssistant?.needHuman;
     chatMessages.value = restored.length ? restored : [createWelcomeMessage()];
-    await scrollToBottom();
+    await scrollToBottom(true);
   } catch (error: any) {
     message.error(error?.message || '会话恢复失败');
   } finally {
@@ -481,6 +568,8 @@ async function ask(text = question.value) {
   question.value = '';
   loading.value = true;
   activeView.value = 'chat';
+  autoScrollToBottom.value = true;
+  answerTimerToken += 1;
   const userMessageId = `u-${Date.now()}`;
   const assistantMessageId = `a-${Date.now()}`;
 
@@ -497,7 +586,7 @@ async function ask(text = question.value) {
     role: 'assistant',
     text: '正在理解你的问题...',
   });
-  await scrollToBottom();
+  await scrollToBottom(true);
 
   try {
     const result = await askQuestion(rawQuestion, false, conversationId.value);
@@ -512,7 +601,6 @@ async function ask(text = question.value) {
       assistantMessage.intentLabel = result.intent_label;
       assistantMessage.issueDraft = result.issue_draft;
       assistantMessage.llmUsed = result.llm_used;
-      assistantMessage.loading = false;
       assistantMessage.missingFields = result.missing_fields || [];
       assistantMessage.needHuman = result.need_human;
       assistantMessage.nextActions = result.next_actions || [];
@@ -521,7 +609,7 @@ async function ask(text = question.value) {
       assistantMessage.references = result.references || [];
       assistantMessage.riskLevel = result.risk_level;
       assistantMessage.status = result.model_status;
-      assistantMessage.text = result.answer;
+      await revealAssistantAnswer(assistantMessage, result.answer);
     }
     needHuman.value = result.need_human;
     currentIssueDraft.value = result.issue_draft || null;
@@ -682,7 +770,16 @@ async function handlePortalLogin() {
   const role = result.userInfo?.roles?.[0];
   if (['admin', 'auditor', 'ops'].includes(role || '')) {
     message.info('工作人员账号已进入管理台');
-    await router.replace('/ops/dashboard');
+    const redirectQuery = Array.isArray(route.query.redirect)
+      ? route.query.redirect[0]
+      : route.query.redirect;
+    let redirectPath = '';
+    try {
+      redirectPath = redirectQuery ? decodeURIComponent(redirectQuery) : '';
+    } catch {
+      redirectPath = '';
+    }
+    await router.replace(redirectPath.startsWith('/ops') ? redirectPath : '/ops/dashboard');
     return;
   }
   portalLoginForm.value.password = '';
@@ -701,6 +798,8 @@ watch(
     suggestTimer = setTimeout(() => loadSuggestions(value), 180);
   },
 );
+
+useAutoRefresh(refreshPortalData, 15000);
 
 onMounted(async () => {
   if (isAuthenticated.value) {
@@ -723,6 +822,13 @@ watch(
     portalLoginMode.value = value === 'staff' ? 'staff' : 'user';
   },
 );
+
+onUnmounted(() => {
+  if (suggestTimer) {
+    clearTimeout(suggestTimer);
+  }
+  answerTimerToken += 1;
+});
 </script>
 
 <template>
@@ -963,7 +1069,14 @@ watch(
             </button>
           </header>
 
-          <div ref="chatBodyRef" class="chat-body">
+          <div
+            ref="chatBodyRef"
+            class="chat-body"
+            @pointerdown="handleChatUserIntent"
+            @scroll.passive="handleChatScroll"
+            @touchstart.passive="handleChatUserIntent"
+            @wheel.passive="handleChatUserIntent"
+          >
             <div
               v-for="item in chatMessages"
               :key="item.id"
@@ -973,13 +1086,14 @@ watch(
               <div class="message-avatar">
                 {{ item.role === 'user' ? '我' : item.role === 'system' ? '记' : '云' }}
               </div>
-              <article class="message-bubble">
+              <article :class="['message-bubble', { streaming: item.streaming }]">
                 <div class="message-meta">
                   <strong>{{ item.role === 'user' ? '你' : item.role === 'system' ? '系统记录' : '云维' }}</strong>
                   <small>{{ item.createdAt }}</small>
                 </div>
                 <a-spin v-if="item.loading" />
                 <p>{{ item.text }}</p>
+                <span v-if="item.streaming" class="typing-cursor" aria-hidden="true">▍</span>
 
                 <div v-if="showAnswerTags(item)" class="message-tags">
                   <a-tag v-if="item.intentLabel" color="cyan">{{ item.intentLabel }}</a-tag>
@@ -1016,7 +1130,7 @@ watch(
                   </div>
                 </div>
 
-                <details v-if="item.references?.length" class="source-disclosure">
+                <details v-if="item.references?.length && !item.streaming" class="source-disclosure">
                   <summary>查看参考来源</summary>
                   <article v-for="refItem in item.references.slice(0, 3)" :key="refItem.id" class="source-item">
                     <strong>{{ refItem.title }}</strong>
@@ -1025,7 +1139,7 @@ watch(
                   </article>
                 </details>
 
-                <div v-if="item.role === 'assistant' && !item.loading" class="message-actions">
+                <div v-if="item.role === 'assistant' && !item.loading && !item.streaming" class="message-actions">
                   <button class="small-button" type="button" @click="fillQuestion(item.question || '')">
                     <IconifyIcon icon="lucide:rotate-ccw" />
                     <span>继续咨询</span>
@@ -1159,9 +1273,7 @@ watch(
           >
             {{ item.label }}
           </button>
-          <button class="icon-button refresh" :disabled="issuesLoading" type="button" @click="loadIssues">
-            <IconifyIcon icon="lucide:refresh-cw" />
-          </button>
+          <a-tag color="blue">自动刷新中</a-tag>
         </div>
 
         <a-empty v-if="!issuesLoading && latestIssues.length === 0" description="暂无在线记录" />
@@ -2140,6 +2252,10 @@ h2 {
   padding: 12px 14px;
 }
 
+.message-bubble.streaming {
+  min-width: min(320px, 88%);
+}
+
 .message-user .message-bubble {
   background: #0f766e;
   border-color: #0f766e;
@@ -2167,6 +2283,12 @@ h2 {
 .message-bubble p {
   line-height: 1.75;
   white-space: pre-wrap;
+}
+
+.typing-cursor {
+  color: #0f766e;
+  display: inline-block;
+  margin-top: 6px;
 }
 
 .message-tags,

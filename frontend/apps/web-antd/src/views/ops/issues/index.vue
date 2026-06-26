@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 
 import { useUserStore } from '@vben/stores';
 
-import { message, Modal } from 'ant-design-vue';
+import { message } from 'ant-design-vue';
 
 import {
   acceptIssue,
@@ -17,8 +17,8 @@ import {
   isProtectedIssueAttachment,
   listIssues,
   uploadIssueAttachment,
-  visitIssue,
 } from '#/api/ops';
+import { useAutoRefresh } from '#/composables/use-auto-refresh';
 
 const userStore = useUserStore();
 const form = ref({
@@ -68,7 +68,6 @@ const statusOptions = [
   { label: '已受理', value: 'accepted' },
   { label: '处理中', value: 'processing' },
   { label: '待补充', value: 'need_user_info' },
-  { label: '待回访', value: 'pending_visit' },
   { label: '已关闭', value: 'closed' },
 ];
 
@@ -89,10 +88,8 @@ const priorityMeta: Record<string, { color: string; label: string }> = {
 const statusMeta: Record<string, { color: string; label: string }> = {
   accepted: { color: 'cyan', label: '已受理' },
   closed: { color: 'green', label: '已关闭' },
-  handled: { color: 'blue', label: '待回访' },
   need_user_info: { color: 'purple', label: '待用户补充' },
   pending: { color: 'orange', label: '待处理' },
-  pending_visit: { color: 'blue', label: '待回访' },
   processing: { color: 'geekblue', label: '处理中' },
   submitted: { color: 'orange', label: '已提交' },
 };
@@ -102,6 +99,10 @@ const workflowActions = [
   { label: '待用户补充', status: 'need_user_info' },
 ];
 
+function canChangeStatus(item: any) {
+  return canHandle.value && ['submitted', 'pending', 'accepted', 'processing', 'need_user_info'].includes(item.status);
+}
+
 async function load() {
   loading.value = true;
   try {
@@ -110,6 +111,8 @@ async function load() {
     loading.value = false;
   }
 }
+
+useAutoRefresh(load, 12000);
 
 async function submit() {
   if (!form.value.title.trim() || !form.value.description.trim()) {
@@ -180,7 +183,7 @@ async function handle(id: number) {
   try {
     await handleIssue(id, text);
     solution.value[id] = '';
-    message.success('处理结果已提交，等待回访确认');
+    message.success('处理结果已提交，记录已关闭');
     await load();
   } finally {
     handling.value[id] = false;
@@ -206,27 +209,6 @@ async function submitKnowledgeCandidate(id: number) {
   } finally {
     candidateSubmitting.value[id] = false;
   }
-}
-
-function confirmVisit(id: number, resolved: boolean) {
-  Modal.confirm({
-    content: resolved
-      ? '确认用户已回访并认可解决结果？确认后会关闭记录，并把处理结果沉淀为知识案例。'
-      : '确认用户反馈仍未解决？确认后记录会转为待用户补充。',
-    okText: '确认',
-    onOk: () => visit(id, resolved),
-    title: resolved ? '回访已解决' : '回访未解决',
-  });
-}
-
-async function visit(id: number, resolved: boolean) {
-  await visitIssue(id, {
-    resolved,
-    satisfaction_score: resolved ? 5 : 2,
-    visit_result: resolved ? '用户确认问题已解决' : '用户反馈仍未解决，需要继续处理',
-  });
-  message.success(resolved ? '记录已关闭并沉淀知识案例' : '记录已回到待处理状态');
-  await load();
 }
 
 function openFeedback(item: any) {
@@ -257,10 +239,6 @@ function metaOf(map: Record<string, { color: string; label: string }>, value: st
   return map[value] || { color: 'default', label: value || '未设置' };
 }
 
-function canVisit(item: any) {
-  return item.status === 'pending_visit' || item.status === 'handled';
-}
-
 function attachmentName(url = '') {
   if (!url) return '';
   const clean = url.split('?')[0] || '';
@@ -288,9 +266,7 @@ onMounted(load);
     <div class="ops-hero mb-5">
       <div class="ops-kicker">Incident Desk</div>
       <h1>在线记录与人工处理台</h1>
-      <p>
-        用户提交无法自助解决的问题；运维人员处理、回访，确认解决后自动沉淀为知识案例。
-      </p>
+      <p>用户提交无法自助解决的问题；运维人员处理后直接关闭，必要时再提炼为知识案例。</p>
       <div class="ops-hero-metrics">
         <span v-for="item in heroMetrics" :key="item.label">
           <b>{{ item.value }}</b>
@@ -366,15 +342,15 @@ onMounted(load);
             @search="load"
           />
         </div>
-        <a-button data-testid="ops-issue-refresh" :loading="loading" @click="load">刷新</a-button>
+        <a-tag color="blue">自动刷新中</a-tag>
       </div>
 
       <a-empty v-if="!loading && rows.length === 0" description="暂无在线记录" />
       <a-list v-else :data-source="rows" :loading="loading" item-layout="vertical">
         <template #renderItem="{ item }">
           <a-list-item class="issue-item" data-testid="ops-issue-row">
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <section class="min-w-0 flex-1">
+            <div class="issue-card-layout">
+              <section class="issue-summary">
                 <div class="flex flex-wrap items-center gap-2">
                   <strong class="text-lg">#{{ item.id }} {{ item.title }}</strong>
                   <a-tag :color="metaOf(statusMeta, item.status).color">
@@ -410,19 +386,21 @@ onMounted(load);
                 <a-alert v-if="item.solution" class="mt-4" type="success" show-icon :message="`处理结果：${item.solution}`" />
               </section>
 
-              <aside class="issue-progress-panel w-full p-4 lg:w-[420px]">
-                <div class="mb-3 font-medium">处理进度</div>
-                <a-timeline v-if="item.events?.length">
-                  <a-timeline-item v-for="event in item.events" :key="`${item.id}-${event.created_at}-${event.event_type}`">
-                    <div class="text-sm font-medium">{{ event.content }}</div>
-                    <div class="text-xs text-slate-500">
-                      {{ event.operator_name || '系统' }} · {{ event.created_at }}
-                    </div>
-                  </a-timeline-item>
-                </a-timeline>
-                <a-empty v-else description="暂无处理事件" />
+              <section class="issue-workbench">
+                <div class="issue-progress-panel">
+                  <div class="mb-3 font-medium">处理进度</div>
+                  <a-timeline v-if="item.events?.length">
+                    <a-timeline-item v-for="event in item.events" :key="`${item.id}-${event.created_at}-${event.event_type}`">
+                      <div class="text-sm font-medium">{{ event.content }}</div>
+                      <div class="text-xs text-slate-500">
+                        {{ event.operator_name || '系统' }} · {{ event.created_at }}
+                      </div>
+                    </a-timeline-item>
+                  </a-timeline>
+                  <a-empty v-else description="暂无处理事件" />
+                </div>
 
-                <div v-if="canHandle && item.status !== 'closed'" class="mt-4 border-t border-slate-200 pt-4">
+                <div v-if="canChangeStatus(item)" class="issue-action-panel">
                   <div class="mb-3 flex flex-wrap gap-2">
                     <a-button
                       v-if="item.status === 'submitted' || item.status === 'pending'"
@@ -481,7 +459,6 @@ onMounted(load);
                         <p>{{ ref.content_preview }}</p>
                       </div>
                     </div>
-                    <a-alert class="mt-3" type="success" show-icon :message="`回访话术：${assistMap[item.id].visit_script}`" />
                     <div v-if="assistMap[item.id].knowledge_candidate" class="knowledge-candidate-box mt-3 p-3">
                       <div class="text-sm font-medium text-amber-800">知识候选草稿</div>
                       <div class="mt-1 text-sm text-amber-700">{{ assistMap[item.id].knowledge_candidate.title }}</div>
@@ -506,23 +483,21 @@ onMounted(load);
                     <a-button data-testid="ops-issue-submit-handle" :loading="handling[item.id]" size="small" type="primary" @click="handle(item.id)">
                       提交处理
                     </a-button>
-                    <a-button v-if="canVisit(item)" data-testid="ops-issue-visit-resolved" size="small" @click="confirmVisit(item.id, true)">回访已解决</a-button>
-                    <a-button v-if="canVisit(item)" size="small" danger @click="confirmVisit(item.id, false)">回访未解决</a-button>
                   </div>
                 </div>
                 <a-alert
                   v-else-if="!canHandle"
-                  class="mt-4"
-                  message="普通用户可查看自己提交记录的处理状态，处理与回访由运维人员完成。"
+                  class="issue-readonly-note"
+                  message="普通用户可查看自己提交记录的处理状态，处理由运维人员完成。"
                   type="info"
                   show-icon
                 />
-                <div v-if="!canHandle && item.status === 'closed'" class="mt-4 border-t border-slate-200 pt-4">
+                <div v-if="!canHandle && item.status === 'closed'" class="issue-feedback">
                   <a-button size="small" type="primary" @click="openFeedback(item)">
                     {{ item.user_satisfaction_score ? '修改满意度评价' : '提交满意度评价' }}
                   </a-button>
                 </div>
-              </aside>
+              </section>
             </div>
           </a-list-item>
         </template>
@@ -565,6 +540,22 @@ onMounted(load);
   padding: 18px !important;
 }
 
+.issue-card-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.issue-summary {
+  min-width: 0;
+}
+
+.issue-workbench {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  min-width: 0;
+}
+
 .assist-box {
   background: #fff;
   border: 1px solid #bae6fd;
@@ -575,12 +566,30 @@ onMounted(load);
 .issue-progress-panel {
   background: #f8fafc;
   border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.issue-action-panel {
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  min-width: 0;
+  padding: 12px;
 }
 
 .knowledge-candidate-box {
   background: #fff7ed;
   border: 1px solid #fed7aa;
   border-radius: 8px;
+}
+
+.issue-readonly-note {
+  margin: 0;
+}
+
+.issue-feedback {
+  margin-top: 12px;
 }
 
 .attachment-link {
@@ -619,5 +628,11 @@ onMounted(load);
 .knowledge-ref p {
   color: #64748b;
   margin-top: 4px;
+}
+
+@media (max-width: 1180px) {
+  .issue-workbench {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -1207,3 +1207,22 @@ def change_knowledge_status(item_id: int, data: KnowledgeStatusUpdate, user: dic
         "status": data.status,
         "updated_at": now,
     }
+
+
+def delete_knowledge(item_id: int, user: dict[str, Any]) -> dict[str, Any]:
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute("select title,status from knowledge where id=?", (item_id,)).fetchone()
+        if row:
+            conn.execute("delete from knowledge where id=?", (item_id,))
+            audit("knowledge_delete", "knowledge", f"删除知识：{row['title']}（原状态：{row['status']}）", item_id)
+        else:
+            audit("knowledge_delete", "knowledge", f"删除知识：#{item_id}（记录已不存在）", item_id)
+    rag_service.clear_cache()
+    return {
+        "deleted": True,
+        "deleted_at": now,
+        "id": item_id,
+        "status": row["status"] if row else "missing",
+        "title": row["title"] if row else f"知识条目 #{item_id}",
+    }
