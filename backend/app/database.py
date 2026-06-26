@@ -148,6 +148,7 @@ def init_db() -> None:
         """)
         ensure_issue_columns(conn)
         ensure_knowledge_columns(conn)
+        ensure_qa_conversation_columns(conn)
         ensure_account_columns(conn)
         ensure_account_approval_columns(conn)
         ensure_issue_attachment_columns(conn)
@@ -177,6 +178,16 @@ def ensure_issue_columns(conn: sqlite3.Connection) -> None:
     for name, definition in columns.items():
         if name not in existing:
             conn.execute(f"alter table issues add column {name} {definition}")
+
+
+def ensure_qa_conversation_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("pragma table_info(qa_conversations)").fetchall()}
+    columns = {
+        "deleted_at": "text not null default ''",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"alter table qa_conversations add column {name} {definition}")
 
 
 def ensure_knowledge_columns(conn: sqlite3.Connection) -> None:

@@ -9,6 +9,7 @@ from ..schemas import QuestionRequest
 from ..security import current_user
 from ..services.qa_service import (
     ask_question,
+    delete_qa_conversation as delete_qa_conversation_record,
     evaluate_rag as evaluate_rag_cases,
     get_qa_conversation as get_qa_conversation_record,
     list_qa_conversations as list_qa_conversation_rows,
@@ -45,3 +46,8 @@ def list_qa_conversations(
 @router.get("/qa/conversations/{conversation_id}")
 def get_qa_conversation(conversation_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     return get_qa_conversation_record(conversation_id, user)
+
+
+@router.delete("/qa/conversations/{conversation_id}")
+def delete_qa_conversation(conversation_id: int, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    return delete_qa_conversation_record(conversation_id, user)

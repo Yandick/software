@@ -5,11 +5,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { IconifyIcon } from '@vben/icons';
 import { useAccessStore, useUserStore } from '@vben/stores';
 
-import { message } from 'ant-design-vue';
+import { message, Modal } from 'ant-design-vue';
 
 import {
   askQuestion,
   createIssue,
+  deleteQaConversation,
   draftIssue,
   downloadIssueAttachment,
   feedbackIssue,
@@ -80,6 +81,7 @@ const conversationTitle = ref('新会话');
 const loading = ref(false);
 const creatingIssue = ref(false);
 const conversationLoading = ref(false);
+const deletingConversationId = ref<number | null>(null);
 const restoringConversation = ref(false);
 const currentIssueDraft = ref<Record<string, any> | null>(null);
 const needHuman = ref(false);
@@ -396,6 +398,82 @@ function conversationPreview(item: QaConversation) {
   return item.last_message || item.title || `会话 #${item.id}`;
 }
 
+function conversationLabel(item: QaConversation) {
+  return item.title || `会话 #${item.id}`;
+}
+
+function escapeHtml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderInlineMarkdown(value = '') {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderMessageMarkdown(value = '') {
+  const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+  const html: string[] = [];
+  let paragraph: string[] = [];
+  let listType: 'ol' | 'ul' | '' = '';
+  let listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${paragraph.join('<br>')}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listType || !listItems.length) return;
+    html.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join('')}</${listType}>`);
+    listType = '';
+    listItems = [];
+  };
+  const pushListItem = (type: 'ol' | 'ul', content: string) => {
+    flushParagraph();
+    if (listType && listType !== type) flushList();
+    listType = type;
+    listItems.push(renderInlineMarkdown(content));
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/) || trimmed.match(/^\*\*([^*]+)\*\*\s*$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      html.push(`<h3>${renderInlineMarkdown(heading[1] || '')}</h3>`);
+      continue;
+    }
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      pushListItem('ol', ordered[1] || '');
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      pushListItem('ul', unordered[1] || '');
+      continue;
+    }
+    flushList();
+    paragraph.push(renderInlineMarkdown(trimmed));
+  }
+  flushParagraph();
+  flushList();
+  return html.join('');
+}
+
 function attachmentName(url = '') {
   if (!url) return '';
   const clean = url.split('?')[0] || '';
@@ -554,6 +632,31 @@ async function restoreConversation(id: number) {
   } finally {
     restoringConversation.value = false;
   }
+}
+
+function confirmDeleteConversation(item: QaConversation) {
+  const title = conversationLabel(item);
+  Modal.confirm({
+    cancelText: '取消',
+    content: '删除后该咨询会从最近咨询中移除，已产生的问答审计记录仍会保留。',
+    okText: '删除',
+    okType: 'danger',
+    async onOk() {
+      deletingConversationId.value = item.id;
+      try {
+        await deleteQaConversation(item.id);
+        conversations.value = conversations.value.filter((conversation) => conversation.id !== item.id);
+        if (conversationId.value === item.id) {
+          startNewConversation();
+        }
+        message.success('咨询记录已删除');
+        await loadConversations();
+      } finally {
+        deletingConversationId.value = null;
+      }
+    },
+    title: `删除「${title}」？`,
+  });
 }
 
 async function ask(text = question.value) {
@@ -760,13 +863,19 @@ async function handlePortalLogin() {
     message.warning('请输入账号和密码');
     return;
   }
-  const result = await authStore.authLogin(
-    {
-      password: portalLoginForm.value.password,
-      username,
-    },
-    async () => {},
-  );
+  let result: Awaited<ReturnType<typeof authStore.authLogin>>;
+  try {
+    result = await authStore.authLogin(
+      {
+        password: portalLoginForm.value.password,
+        username,
+      },
+      async () => {},
+    );
+  } catch {
+    portalLoginForm.value.password = '';
+    return;
+  }
   const role = result.userInfo?.roles?.[0];
   if (['admin', 'auditor', 'ops'].includes(role || '')) {
     message.info('工作人员账号已进入管理台');
@@ -1042,17 +1151,28 @@ onUnmounted(() => {
               <a-empty description="暂无会话" />
             </div>
             <div v-else class="history-list">
-              <button
+              <div
                 v-for="item in visibleConversations"
                 :key="item.id"
                 :class="['history-row', { active: item.id === conversationId }]"
-                type="button"
-                @click="restoreConversation(item.id)"
               >
-                <strong>{{ item.title || `会话 #${item.id}` }}</strong>
-                <span>{{ conversationPreview(item) }}</span>
-                <small>{{ item.message_count || 0 }} 条 · {{ formatTime(item.updated_at) }}</small>
-              </button>
+                <button class="history-main" type="button" @click="restoreConversation(item.id)">
+                  <strong>{{ conversationLabel(item) }}</strong>
+                  <span>{{ conversationPreview(item) }}</span>
+                  <small>{{ item.message_count || 0 }} 条 · {{ formatTime(item.updated_at) }}</small>
+                </button>
+                <button
+                  :aria-label="`删除 ${conversationLabel(item)}`"
+                  class="history-delete"
+                  :disabled="deletingConversationId === item.id"
+                  :title="`删除 ${conversationLabel(item)}`"
+                  type="button"
+                  @click.stop="confirmDeleteConversation(item)"
+                >
+                  <a-spin v-if="deletingConversationId === item.id" size="small" />
+                  <IconifyIcon v-else icon="lucide:trash-2" />
+                </button>
+              </div>
             </div>
           </section>
         </aside>
@@ -1092,7 +1212,12 @@ onUnmounted(() => {
                   <small>{{ item.createdAt }}</small>
                 </div>
                 <a-spin v-if="item.loading" />
-                <p>{{ item.text }}</p>
+                <div
+                  v-if="item.role === 'assistant' || item.role === 'system'"
+                  class="message-content"
+                  v-html="renderMessageMarkdown(item.text)"
+                ></div>
+                <p v-else>{{ item.text }}</p>
                 <span v-if="item.streaming" class="typing-cursor" aria-hidden="true">▍</span>
 
                 <div v-if="showAnswerTags(item)" class="message-tags">
@@ -1796,7 +1921,9 @@ button {
 .filter-button,
 .suggestion-chip,
 .service-tile,
-.history-row {
+.history-row,
+.history-delete,
+.history-main {
   border: 0;
   border-radius: 8px;
   cursor: pointer;
@@ -2102,14 +2229,47 @@ h2 {
 }
 
 .history-row {
+  align-items: stretch;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   color: var(--ink);
-  display: block;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) 34px;
   min-height: 68px;
-  padding: 10px;
-  text-align: left;
+  padding: 4px;
   width: 100%;
+}
+
+.history-main {
+  background: transparent;
+  color: inherit;
+  display: block;
+  min-width: 0;
+  padding: 6px;
+  text-align: left;
+}
+
+.history-delete {
+  align-self: start;
+  background: transparent;
+  color: #98a2b3;
+  display: inline-grid;
+  height: 30px;
+  justify-content: center;
+  margin-top: 2px;
+  place-items: center;
+  width: 30px;
+}
+
+.history-delete:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.history-delete:disabled {
+  cursor: wait;
+  opacity: 0.7;
 }
 
 .history-row strong {
@@ -2280,9 +2440,65 @@ h2 {
   color: rgb(255 255 255 / 72%);
 }
 
-.message-bubble p {
+.message-bubble p,
+.message-content {
   line-height: 1.75;
   white-space: pre-wrap;
+}
+
+.message-content :deep(p),
+.message-content :deep(ul),
+.message-content :deep(ol),
+.message-content :deep(h3) {
+  margin: 0;
+}
+
+.message-content :deep(p + p),
+.message-content :deep(p + ul),
+.message-content :deep(p + ol),
+.message-content :deep(ul + p),
+.message-content :deep(ol + p),
+.message-content :deep(h3 + p),
+.message-content :deep(h3 + ul),
+.message-content :deep(h3 + ol) {
+  margin-top: 8px;
+}
+
+.message-content :deep(h3) {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.message-content :deep(ul),
+.message-content :deep(ol) {
+  padding-left: 20px;
+  white-space: normal;
+}
+
+.message-content :deep(ul) {
+  list-style: disc;
+}
+
+.message-content :deep(ol) {
+  list-style: decimal;
+}
+
+.message-content :deep(li) {
+  margin-top: 4px;
+}
+
+.message-content :deep(strong) {
+  font-weight: 800;
+}
+
+.message-content :deep(code) {
+  background: #e2e8f0;
+  border-radius: 4px;
+  color: #0f172a;
+  font-size: 0.92em;
+  padding: 1px 5px;
 }
 
 .typing-cursor {

@@ -128,6 +128,78 @@ function conversationPreview(item: QaConversation) {
   return item.last_message || item.title || `数字员工会话 #${item.id}`;
 }
 
+function escapeHtml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function renderInlineMarkdown(value = '') {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderMessageMarkdown(value = '') {
+  const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+  const html: string[] = [];
+  let paragraph: string[] = [];
+  let listType: 'ol' | 'ul' | '' = '';
+  let listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${paragraph.join('<br>')}</p>`);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listType || !listItems.length) return;
+    html.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join('')}</${listType}>`);
+    listType = '';
+    listItems = [];
+  };
+  const pushListItem = (type: 'ol' | 'ul', content: string) => {
+    flushParagraph();
+    if (listType && listType !== type) flushList();
+    listType = type;
+    listItems.push(renderInlineMarkdown(content));
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+    const heading = trimmed.match(/^#{1,3}\s+(.+)$/) || trimmed.match(/^\*\*([^*]+)\*\*\s*$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      html.push(`<h3>${renderInlineMarkdown(heading[1] || '')}</h3>`);
+      continue;
+    }
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (ordered) {
+      pushListItem('ol', ordered[1] || '');
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    if (unordered) {
+      pushListItem('ul', unordered[1] || '');
+      continue;
+    }
+    flushList();
+    paragraph.push(renderInlineMarkdown(trimmed));
+  }
+  flushParagraph();
+  flushList();
+  return html.join('');
+}
+
 function riskColor(level = '') {
   const colors: Record<string, string> = { high: 'red', low: 'green', medium: 'orange' };
   return colors[level] || 'default';
@@ -529,7 +601,12 @@ onMounted(async () => {
                 <small>{{ item.createdAt }}</small>
               </div>
               <a-spin v-if="item.loading" />
-              <p class="whitespace-pre-wrap leading-7">{{ item.text }}</p>
+              <div
+                v-if="item.role === 'assistant' || item.role === 'system'"
+                class="message-content"
+                v-html="renderMessageMarkdown(item.text)"
+              ></div>
+              <p v-else class="whitespace-pre-wrap leading-7">{{ item.text }}</p>
 
               <div v-if="item.role === 'assistant' && !item.loading" class="mt-3 flex flex-wrap gap-2">
                 <a-tag v-if="item.status" color="blue">模型状态：{{ item.status }}</a-tag>
@@ -1047,6 +1124,66 @@ onMounted(async () => {
 
 .message-user .message-meta small {
   color: rgb(255 255 255 / 65%);
+}
+
+.message-content {
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+.message-content :deep(p),
+.message-content :deep(ul),
+.message-content :deep(ol),
+.message-content :deep(h3) {
+  margin: 0;
+}
+
+.message-content :deep(p + p),
+.message-content :deep(p + ul),
+.message-content :deep(p + ol),
+.message-content :deep(ul + p),
+.message-content :deep(ol + p),
+.message-content :deep(h3 + p),
+.message-content :deep(h3 + ul),
+.message-content :deep(h3 + ol) {
+  margin-top: 8px;
+}
+
+.message-content :deep(h3) {
+  color: var(--accent-strong);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.message-content :deep(ul),
+.message-content :deep(ol) {
+  padding-left: 20px;
+  white-space: normal;
+}
+
+.message-content :deep(ul) {
+  list-style: disc;
+}
+
+.message-content :deep(ol) {
+  list-style: decimal;
+}
+
+.message-content :deep(li) {
+  margin-top: 4px;
+}
+
+.message-content :deep(strong) {
+  font-weight: 800;
+}
+
+.message-content :deep(code) {
+  background: #e2e8f0;
+  border-radius: 4px;
+  color: #0f172a;
+  font-size: 0.92em;
+  padding: 1px 5px;
 }
 
 .reference-box {

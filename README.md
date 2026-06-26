@@ -34,7 +34,6 @@ software/
 │       └── services/
 ├── frontend/                # Vue Vben Admin 前端
 ├── models/qwen3-1.7b         # 本地模型目录
-├── docs/                     # 开发、依赖、任务清单文档
 ├── scripts/start_all.sh      # 一键启动脚本
 ├── scripts/stop_all.sh       # 停止脚本
 ├── scripts/package_check.py   # 离线交付包装检查
@@ -255,7 +254,7 @@ NCCL_NET=Socket
 | `BACKEND_PORT` | `8010` | 后端端口 |
 | `FRONTEND_PORT` | `5666` | 前端端口 |
 
-配置样例见 `.env.example`。生产部署说明见 `docs/deployment.md`。
+配置样例见 `.env.example`。生产部署优先使用 `scripts/start_deploy.sh`，启动前按实际机器设置 base model 和 embedding model 使用的显卡。
 
 ## 体验账号
 
@@ -300,12 +299,6 @@ python scripts/check_dependencies.py
 python scripts/package_check.py
 ```
 
-如果要同时跑后端 pytest：
-
-```bash
-python scripts/package_check.py --run-tests
-```
-
 运行中的服务提供三个系统检查入口：
 
 - `/api/health`：公开进程存活检查，返回应用名和版本号。
@@ -313,19 +306,7 @@ python scripts/package_check.py --run-tests
 - `/api/ready?include_llm=true&require_llm=true`：完整链路就绪检查，额外要求 vLLM 可用。
 - `/api/system/info`：登录后查看系统版本、前端包、数据库类型、模型路径和功能开关，不返回密钥。
 
-## 工程测试与迁移
-
-后端正式测试入口为 pytest：
-
-```bash
-python -m pytest
-```
-
-当前测试使用临时 SQLite 和 mock LLM，不依赖真实 vLLM/GPU。旧脚本入口仍保留：
-
-```bash
-python scripts/test_agent_react.py
-```
+## 数据库迁移
 
 数据库迁移已建立 Alembic baseline，新部署可运行：
 
@@ -349,19 +330,15 @@ alembic stamp head
 python scripts/run_acceptance.py
 ```
 
-该脚本会检查后端健康、后端就绪、vLLM 就绪、RAG smoke test、知识敏感信息检查和审计 CSV 导出。若刚更新过代码，请先重启后端；详细清单见 `docs/final-acceptance-checklist.md`。
+该脚本会检查后端健康、后端就绪、vLLM 就绪、RAG smoke test、知识敏感信息检查和审计 CSV 导出。若刚更新过代码，请先重启后端。
 
-## 开发与任务文档
+## 交付文件说明
 
-- `docs/current-todo.md`：当前项目整理和按优先级排列的待办清单。
-- `docs/task-checklist.md`：任务清单和完成度，每次继续开发前先看这里。
-- `docs/final-acceptance-checklist.md`：正式录屏和答辩前的一键验收清单。
-- `docs/deployment.md`：生产配置、数据库迁移、管理员初始化、健康检查和 systemd 示例。
-- `docs/engineering-standards.md`：工程分层、测试、迁移和安全规范。
-- `docs/code-style.md`：代码与注释规范。
-- `docs/dependencies.md`：依赖说明。
-- `docs/development-review.md`：审查与整改记录。
-- `agent.md`：开发约定和已沉淀知识。
+- `scripts/start_deploy.sh`：正式启动入口，部署人只需要指定 base model 和 embedding model 使用的显卡。
+- `scripts/start_all.sh` / `scripts/stop_all.sh`：底层启动与停止脚本。
+- `scripts/package_check.py`：离线包装检查，提交或部署前先运行。
+- `scripts/run_acceptance.py`：服务启动后的一键验收检查。
+- `.env.example`：公开配置样例；真实 `.env`、模型权重、数据库、日志和内部任务文档不进入 Git。
 
 ## qwen-agent 说明
 

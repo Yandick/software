@@ -53,7 +53,7 @@ REQUIRED_COLUMNS = {
     },
     "knowledge": {"review_note", "reviewed_at", "reviewed_by", "status", "version"},
     "ops_accounts": {"contact_phone", "department", "expires_at", "owner_name", "risk_level", "status"},
-    "qa_conversations": {"status", "title", "updated_at", "user_id"},
+    "qa_conversations": {"deleted_at", "status", "title", "updated_at", "user_id"},
     "qa_logs": {"model_status", "need_human", "references_json"},
     "qa_messages": {"conversation_id", "metadata_json", "role"},
     "users": {"department", "password_hash", "role", "status", "username"},

@@ -80,6 +80,8 @@ STOP_TERMS = {
 
 CHUNK_MAX_CHARS = 260
 SNIPPET_MAX_CHARS = 180
+PRIMARY_CONTEXT_MAX_CHARS = 2600
+SECONDARY_CONTEXT_MAX_CHARS = 700
 MIN_REFERENCE_SCORE = 0.05
 MIN_EMBEDDING_REFERENCE_SCORE = 0.28
 MIN_EMBEDDING_ONLY_SCORE = 0.55
@@ -584,11 +586,18 @@ class RagService:
         for idx, item in enumerate(references, start=1):
             matched = "、".join(item.get("matched_terms") or [])
             snippet = item.get("snippet") or self._compact_text(str(item.get("content", "")), SNIPPET_MAX_CHARS)
-            content = self._compact_text(str(item.get("content", "")), 700)
+            is_primary = idx == 1
+            content_limit = PRIMARY_CONTEXT_MAX_CHARS if is_primary else SECONDARY_CONTEXT_MAX_CHARS
+            content = self._compact_text(str(item.get("content", "")), content_limit)
+            priority_note = (
+                "PRIMARY_MATCH: highest-ranked evidence. Use this reference first; preserve its concrete cause, steps, recovery method, and cautions when answering."
+                if is_primary
+                else "SECONDARY_MATCH: use only to supplement or cross-check the primary reference."
+            )
             blocks.append(
                 "\n".join(
                     [
-                        f"[{idx}] knowledge_id={item['id']} source_type={item.get('source_type', '')} version={item.get('version', 1)} score={item.get('score', 0)}",
+                        f"[{idx}] {priority_note}",
                         f"标题：{item['title']}",
                         f"标签：{item.get('tags','')}",
                         f"命中词：{matched or '无'}",

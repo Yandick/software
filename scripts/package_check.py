@@ -145,16 +145,9 @@ def check_command_version(command: str, args: list[str]) -> dict[str, Any]:
     return check("warn", command, last_error or "not found")
 
 
-def run_pytest() -> dict[str, Any]:
-    result = run([sys.executable, "-m", "pytest"], timeout=300)
-    detail = (result.stdout + result.stderr).strip().splitlines()[-8:]
-    return check("pass" if result.returncode == 0 else "fail", "pytest", detail)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Offline package readiness checks for the ops digital employee project.")
     parser.add_argument("--production", action="store_true", help="Fail unless the current OPS_* config is production-safe")
-    parser.add_argument("--run-tests", action="store_true", help="Also run python -m pytest")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON only")
     args = parser.parse_args()
 
@@ -169,8 +162,6 @@ def main() -> int:
     checks.append(check_command_version(sys.executable, ["--version"]))
     checks.append(check_command_version("node", ["--version"]))
     checks.append(check_command_version("pnpm", ["--version"]))
-    if args.run_tests:
-        checks.append(run_pytest())
 
     ok = not any(item["status"] == "fail" for item in checks)
     payload = {"ok": ok, "checks": checks}

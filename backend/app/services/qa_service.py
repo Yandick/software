@@ -6,10 +6,11 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ..database import connect, rows_to_dicts, utc_now
+from ..database import audit, connect, rows_to_dicts, utc_now
 from ..deps import ensure_row_exists
 from ..schemas import QuestionRequest
 from .agent_service import agent_service
+from .answer_synthesis_service import build_evidence_brief, build_response_plan
 from .intent_router_service import IntentRoute, intent_router_service
 from .llm_service import llm_service
 from .rag_service import rag_service
@@ -246,16 +247,41 @@ def build_no_context_answer(decision: dict[str, Any]) -> str:
 def build_controlled_operation_answer(decision: dict[str, Any], references: list[dict[str, Any]]) -> str:
     reasons = decision.get("handoff_reasons") or ["涉及高风险账号、权限、生产或批量操作，需要人工受控处理"]
     missing = decision.get("missing_fields") or []
-    refs = [f"#{item.get('id')} {item.get('title', '')}" for item in references[:3]]
     missing_text = "、".join(missing) if missing else "申请人身份、审批依据、目标账号/权限范围、影响范围和回退方案"
-    refs_text = "；".join(refs) if refs else "暂无可引用知识"
     return (
         "1) 结论：该请求涉及受控账号、权限或生产变更，数字员工不能直接执行，也不能提供绕过审批的操作步骤。\n"
         "2) 处理步骤：请创建在线记录或账号审批单，由授权运维/管理员核验身份、审批依据、影响范围和回退方案后处理。\n"
         f"3) 需要补充的信息：{missing_text}。\n"
-        f"4) 是否建议转人工：必须转人工。原因：{'；'.join(str(item) for item in reasons)}。\n"
-        f"5) 引用来源：{refs_text}。"
+        f"4) 是否建议转人工：必须转人工。原因：{'；'.join(str(item) for item in reasons)}。"
     )
+
+
+def strip_inline_reference_section(answer: str) -> str:
+    lines = str(answer or "").rstrip().splitlines()
+    if not lines:
+        return ""
+
+    def normalized_header(line: str) -> str:
+        return re.sub(r"[\s*#：:]+", "", line.strip())
+
+    for index in range(len(lines) - 1, -1, -1):
+        header = normalized_header(lines[index])
+        if header in {"引用", "引用来源", "参考", "参考来源", "来源", "Sources", "References"}:
+            return "\n".join(lines[:index]).rstrip()
+
+    citation_tail = 0
+    for line in reversed(lines):
+        cleaned = line.strip()
+        if not cleaned:
+            citation_tail += 1
+            continue
+        if re.search(r"(引用来源|参考来源|knowledge_id|知识[_-]?id|source\s*id|references?|sources?)", cleaned, flags=re.I):
+            citation_tail += 1
+            continue
+        break
+    if citation_tail:
+        return "\n".join(lines[: len(lines) - citation_tail]).rstrip()
+    return "\n".join(lines).rstrip()
 
 
 def parse_message_metadata(value: str) -> dict[str, Any]:
@@ -269,6 +295,8 @@ def parse_message_metadata(value: str) -> dict[str, Any]:
 def load_qa_conversation(conn: Any, conversation_id: int, user: dict[str, Any]) -> Any:
     row = conn.execute("select * from qa_conversations where id=?", (conversation_id,)).fetchone()
     ensure_row_exists(row, "数字员工会话")
+    if row["deleted_at"]:
+        raise HTTPException(status_code=404, detail="数字员工会话已删除")
     if user.get("role") == "user" and row["user_id"] != user.get("id"):
         raise HTTPException(status_code=403, detail="只能查看自己的数字员工会话")
     return row
@@ -277,6 +305,8 @@ def load_qa_conversation(conn: Any, conversation_id: int, user: dict[str, Any]) 
 def load_qa_conversation_for_write(conn: Any, conversation_id: int, user: dict[str, Any]) -> Any:
     row = conn.execute("select * from qa_conversations where id=?", (conversation_id,)).fetchone()
     ensure_row_exists(row, "数字员工会话")
+    if row["deleted_at"]:
+        raise HTTPException(status_code=404, detail="数字员工会话已删除")
     if row["user_id"] != user.get("id"):
         raise HTTPException(status_code=403, detail="只能继续自己的数字员工会话；管理、运维和审计查看他人会话为只读")
     return row
@@ -408,11 +438,29 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
         intent_route.to_metadata(),
     )
     should_use_llm = bool(agent_result.get("evaluator", {}).get("llm_allowed"))
-    context = rag_service.build_context(result.references)
     decision = build_employee_decision(effective_question, result, refs, draft)
+    evidence = build_evidence_brief(result.references)
+    answer_plan = build_response_plan(
+        question=data.question,
+        retrieval=result,
+        references=refs,
+        draft=draft,
+        decision=decision,
+        intent_route=intent_route.to_metadata(),
+        evidence=evidence,
+    )
+    ranked_context = rag_service.build_context(result.references)
+    context = "\n\n".join(
+        item
+        for item in [
+            f"Evidence brief:\n{evidence['brief']}" if evidence.get("brief") else "",
+            f"Ranked reference context:\n{ranked_context}" if ranked_context else "",
+        ]
+        if item
+    )
     try:
         model_result = (
-            llm_service.generate(effective_question, context, data.enable_thinking)
+            llm_service.generate(effective_question, context, data.enable_thinking, answer_plan=answer_plan)
             if should_use_llm
             else {
                 "content": build_controlled_operation_answer(decision, refs)
@@ -426,11 +474,17 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=f"LLM 数字员工不可用：{exc}") from exc
     answer = model_result["content"]
+    if refs:
+        answer = strip_inline_reference_section(answer)
     need_human = decision["need_human"]
     if need_human:
         if result.high_risk:
             answer += "\n\n我可以继续帮你整理在线记录，由授权运维人员按流程处理。"
-        elif model_result.get("status") != "rag-fallback":
+        elif (
+            model_result.get("status") != "rag-fallback"
+            and answer_plan.get("append_handoff_hint")
+            and "在线记录" not in answer
+        ):
             answer += "\n\n你可以继续补充信息；如果比较急，也可以直接提交在线记录。"
     with connect() as conn:
         conn.execute(
@@ -465,7 +519,9 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
             "reasoning_available": model_result.get("reasoning_available", False),
             "reasoning_enabled": model_result.get("reasoning_enabled", False),
             "agent": agent_result,
+            "evidence": evidence,
             "intent_route": intent_route.to_metadata(),
+            "response_plan": answer_plan,
         },
     )
     return {
@@ -496,9 +552,11 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
             "role": "企业运维数字员工",
             "mode": "llm",
         },
+        "evidence": evidence,
         "next_actions": decision["next_actions"],
         "issue_draft": decision["issue_draft"],
         "intent_route": intent_route.to_metadata(),
+        "response_plan": answer_plan,
     }
 
 
@@ -544,10 +602,11 @@ def evaluate_rag() -> dict[str, Any]:
 
 def list_qa_conversations(limit: int, user: dict[str, Any]) -> list[dict[str, Any]]:
     params: list[Any] = []
-    where = ""
+    where_parts = ["c.deleted_at=''"]
     if user.get("role") == "user":
-        where = "where c.user_id=?"
+        where_parts.append("c.user_id=?")
         params.append(user["id"])
+    where = "where " + " and ".join(where_parts)
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -602,3 +661,20 @@ def get_qa_conversation(conversation_id: int, user: dict[str, Any]) -> dict[str,
         item["metadata"] = parse_message_metadata(item.pop("metadata_json", "{}"))
         messages.append(item)
     return {"conversation": conversation, "messages": messages}
+
+
+def delete_qa_conversation(conversation_id: int, user: dict[str, Any]) -> dict[str, Any]:
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute("select * from qa_conversations where id=?", (conversation_id,)).fetchone()
+        ensure_row_exists(row, "数字员工会话")
+        if row["deleted_at"]:
+            return {"deleted": True, "deleted_at": row["deleted_at"], "id": conversation_id}
+        if row["user_id"] != user.get("id"):
+            raise HTTPException(status_code=403, detail="只能删除自己的数字员工会话")
+        conn.execute(
+            "update qa_conversations set status='deleted',deleted_at=?,updated_at=? where id=?",
+            (now, now, conversation_id),
+        )
+    audit("qa_conversation_delete", "qa_conversation", f"用户删除咨询会话：#{conversation_id}", conversation_id)
+    return {"deleted": True, "deleted_at": now, "id": conversation_id}

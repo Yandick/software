@@ -356,6 +356,10 @@ export function getQaConversation(id: number) {
   return requestClient.get<QaConversationDetail>(`/qa/conversations/${id}`);
 }
 
+export function deleteQaConversation(id: number) {
+  return requestClient.delete<{ deleted: boolean; deleted_at: string; id: number }>(`/qa/conversations/${id}`);
+}
+
 export function getLlmStatus() {
   return requestClient.get<LlmStatus>('/llm/status');
 }

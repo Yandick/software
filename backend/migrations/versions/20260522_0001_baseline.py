@@ -117,6 +117,7 @@ def upgrade() -> None:
       user_id integer,
       title text not null default '',
       status text not null default 'active',
+      deleted_at text not null default '',
       created_at text not null,
       updated_at text not null
     )
