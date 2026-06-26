@@ -261,6 +261,7 @@ export interface KnowledgeSensitiveCheck {
 export interface KnowledgeDuplicateCandidate {
   approx_similarity?: number;
   containment?: number;
+  embedding_similarity?: number;
   id: number;
   relation: string;
   score: number;
@@ -272,6 +273,7 @@ export interface KnowledgeDuplicateCheck {
   blocking: boolean;
   candidates: KnowledgeDuplicateCandidate[];
   decision: 'exact_duplicate' | 'near_duplicate' | 'unique' | string;
+  embedding?: ApiPayload;
   message?: string;
   policy?: ApiPayload;
 }

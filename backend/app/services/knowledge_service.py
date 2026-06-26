@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from ..database import audit, connect, rows_to_dicts, utc_now, write_audit
 from ..deps import ensure_row_exists
 from ..schemas import KnowledgeCreate, KnowledgeStatusUpdate
+from .embedding_service import embedding_service
 from .rag_service import DOMAIN_ALIASES, rag_service
 
 KNOWLEDGE_STATUSES = {"pending_review", "published", "offline"}
@@ -33,6 +34,10 @@ NEAR_DUPLICATE_TITLE_SCORE_THRESHOLD = 0.7
 NEAR_DUPLICATE_MIN_TERMS = 8
 NEAR_DUPLICATE_APPROX_THRESHOLD = 0.86
 NEAR_DUPLICATE_SEMANTIC_THRESHOLD = 0.82
+EMBEDDING_DUPLICATE_THRESHOLD = 0.86
+EMBEDDING_RELATED_THRESHOLD = 0.74
+EMBEDDING_REVIEW_THRESHOLD = 0.8
+EMBEDDING_TEXT_MAX_CHARS = 2200
 AUTO_SKIP_CONTAINMENT_THRESHOLD = 0.94
 AUTO_SKIP_MAX_NOVEL_UNITS = 0
 AUTO_MERGE_MIN_SCORE = 0.78
@@ -147,10 +152,6 @@ def duplicate_terms(title: str = "", content: str = "", tags: str = "") -> set[s
             canonical_norm = normalize_duplicate_text(canonical)
             terms.add(canonical_norm)
             terms.add(f"domain:{canonical_norm}")
-            for alias in aliases:
-                alias_norm = normalize_duplicate_text(alias)
-                if len(alias_norm) >= 2:
-                    terms.add(alias_norm)
     return terms
 
 
@@ -284,6 +285,94 @@ def duplicate_candidate_rows(conn: Any) -> list[dict[str, Any]]:
     return rows_to_dicts(rows)
 
 
+def duplicate_embedding_text(title: str, content: str, tags: str = "") -> str:
+    sections = []
+    if title.strip():
+        sections.append(f"Title: {title.strip()}")
+    if tags.strip():
+        sections.append(f"Tags: {tags.strip()}")
+    cleaned = re.sub(r"\s+", " ", str(content or "")).strip()
+    if cleaned:
+        sections.append(f"Content: {cleaned[:EMBEDDING_TEXT_MAX_CHARS]}")
+    return "\n".join(sections)
+
+
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right:
+        return 0.0
+    limit = min(len(left), len(right))
+    if limit <= 0:
+        return 0.0
+    return sum(float(left[index]) * float(right[index]) for index in range(limit))
+
+
+def attach_duplicate_embedding_scores(
+    *,
+    scored: list[dict[str, Any]],
+    title: str,
+    content: str,
+    tags: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = [
+        item
+        for item in scored
+        if item.get("relation") not in EXACT_DUPLICATE_RELATIONS
+    ]
+    status: dict[str, Any] = {
+        "enabled": False,
+        "error": "",
+        "thresholds": {
+            "duplicate": EMBEDDING_DUPLICATE_THRESHOLD,
+            "related": EMBEDDING_RELATED_THRESHOLD,
+            "review": EMBEDDING_REVIEW_THRESHOLD,
+        },
+    }
+    if not candidates:
+        return scored, status
+
+    try:
+        texts = [duplicate_embedding_text(title, content, tags)]
+        texts.extend(
+            duplicate_embedding_text(
+                str(item.get("_title", "")),
+                str(item.get("_content", "")),
+                str(item.get("_tags", "")),
+            )
+            for item in candidates
+        )
+        vectors = embedding_service.embed_documents(texts)
+    except Exception as exc:
+        status["error"] = exc.__class__.__name__
+        return scored, status
+
+    if len(vectors) != len(candidates) + 1:
+        status["error"] = "embedding_vector_count_mismatch"
+        return scored, status
+
+    status["enabled"] = True
+    incoming_vector = vectors[0]
+    for item, vector in zip(candidates, vectors[1:], strict=False):
+        embedding_similarity = cosine_similarity(incoming_vector, vector)
+        item["embedding_similarity"] = round(embedding_similarity, 4)
+        item["score"] = round(max(float(item.get("score") or 0.0), embedding_similarity), 4)
+        if embedding_similarity >= EMBEDDING_DUPLICATE_THRESHOLD:
+            item["relation"] = "near_duplicate"
+        elif (
+            embedding_similarity >= EMBEDDING_REVIEW_THRESHOLD
+            and (
+                float(item.get("content_similarity") or 0) >= 0.08
+                or float(item.get("semantic_similarity") or 0) >= 0.12
+                or float(item.get("title_similarity") or 0) >= 0.25
+            )
+        ):
+            item["relation"] = "near_duplicate"
+        elif item.get("relation") == "near_duplicate" and embedding_similarity < EMBEDDING_RELATED_THRESHOLD:
+            item["relation"] = "related_same_domain"
+        elif not item.get("relation") and embedding_similarity >= EMBEDDING_REVIEW_THRESHOLD:
+            item["relation"] = "near_duplicate"
+    return scored, status
+
+
 def build_duplicate_check(
     *,
     title: str,
@@ -293,6 +382,7 @@ def build_duplicate_check(
     candidates: list[dict[str, Any]] | None = None,
     conn: Any | None = None,
     limit: int = 5,
+    use_embedding: bool = True,
 ) -> dict[str, Any]:
     if candidates is None:
         if conn is not None:
@@ -330,7 +420,7 @@ def build_duplicate_check(
         approx_similarity = max(minhash_score, simhash_score)
         domain_terms = {term for term in terms if str(term).startswith("domain:")}
         item_domain_terms = {term for term in item_terms if str(term).startswith("domain:")}
-        domain_similarity = term_containment(domain_terms, item_domain_terms)
+        domain_similarity = term_jaccard(domain_terms, item_domain_terms)
         semantic_similarity = term_containment(
             {term for term in terms if str(term).startswith("domain:") or len(str(term)) >= 3},
             {term for term in item_terms if str(term).startswith("domain:") or len(str(term)) >= 3},
@@ -338,6 +428,7 @@ def build_duplicate_check(
         title_similarity = term_jaccard(title_terms, item_title_terms)
         overlap_terms = sorted((terms & item_terms), key=lambda value: (-len(value), value))[:8]
         relation = ""
+        rule_relation = ""
         score = max(content_similarity, containment * 0.92, approx_similarity * 0.9, semantic_similarity * 0.88, domain_similarity * 0.86)
 
         if title_content_hash == existing_title_content_hash:
@@ -351,17 +442,16 @@ def build_duplicate_check(
             or containment >= NEAR_DUPLICATE_CONTAINMENT_THRESHOLD
             or approx_similarity >= NEAR_DUPLICATE_APPROX_THRESHOLD
             or semantic_similarity >= NEAR_DUPLICATE_SEMANTIC_THRESHOLD
-            or (domain_similarity >= 0.67 and (content_similarity >= 0.12 or len(overlap_terms) >= 6))
+            or (domain_similarity >= 0.67 and (content_similarity >= 0.18 or semantic_similarity >= 0.22))
             or (
                 title_similarity >= NEAR_DUPLICATE_TITLE_SCORE_THRESHOLD
                 and content_similarity >= 0.6
             )
         ):
+            rule_relation = "near_duplicate"
             relation = "near_duplicate"
 
-        if not relation:
-            continue
-        scored.append(
+        scored_item = (
             {
                 "approx_similarity": round(approx_similarity, 4),
                 "content_similarity": round(content_similarity, 4),
@@ -379,9 +469,13 @@ def build_duplicate_check(
                     item_terms=item_terms,
                 ),
                 "id": item_id,
+                "_content": item_content,
+                "_tags": item_tags,
+                "_title": item_title,
                 "minhash_similarity": round(minhash_score, 4),
                 "overlap_terms": overlap_terms,
                 "relation": relation,
+                "rule_relation": rule_relation or relation,
                 "score": round(score, 4),
                 "semantic_similarity": round(semantic_similarity, 4),
                 "simhash_similarity": round(simhash_score, 4),
@@ -393,6 +487,25 @@ def build_duplicate_check(
                 "version": item.get("version", 1),
             }
         )
+        scored.append(scored_item)
+
+    if use_embedding:
+        scored, embedding_status = attach_duplicate_embedding_scores(scored=scored, title=title, content=content, tags=tags)
+    else:
+        embedding_status = {
+            "enabled": False,
+            "error": "disabled_for_lightweight_listing",
+            "thresholds": {
+                "duplicate": EMBEDDING_DUPLICATE_THRESHOLD,
+                "related": EMBEDDING_RELATED_THRESHOLD,
+                "review": EMBEDDING_REVIEW_THRESHOLD,
+            },
+        }
+    scored = [
+        {key: value for key, value in item.items() if not key.startswith("_")}
+        for item in scored
+        if item.get("relation") and item.get("relation") != "related_same_domain"
+    ]
 
     scored.sort(
         key=lambda item: (
@@ -419,6 +532,7 @@ def build_duplicate_check(
         "blocking": has_exact,
         "candidates": candidates_out,
         "decision": decision,
+        "embedding": embedding_status,
         "message": message,
         "policy": duplicate_policy(),
     }
@@ -1040,6 +1154,7 @@ def list_knowledge(q: str, status: str, source_type: str, user: dict[str, Any]) 
                     tags=item.get("tags", ""),
                     exclude_id=int(item.get("id") or 0),
                     candidates=duplicate_candidates,
+                    use_embedding=False,
                 )
             )
     return items

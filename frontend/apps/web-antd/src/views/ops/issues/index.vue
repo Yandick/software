@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 
 import { useUserStore } from '@vben/stores';
 
@@ -47,6 +47,7 @@ const candidateSubmitting = ref<Record<number, boolean>>({});
 const feedbackOpen = ref(false);
 const feedbackSubmitting = ref(false);
 const feedbackForm = ref({ feedback: '', id: 0, satisfaction_score: 5 });
+type ScrollSnapshot = { left: number; top: number; target: Element | Window };
 
 const heroMetrics = computed(() => [
   { label: '当前记录', value: rows.value.length },
@@ -103,12 +104,65 @@ function canChangeStatus(item: any) {
   return canHandle.value && ['submitted', 'pending', 'accepted', 'processing', 'need_user_info'].includes(item.status);
 }
 
-async function load() {
+function blurActiveElement() {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) {
+    active.blur();
+  }
+}
+
+function captureScrollSnapshot() {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return [];
+  }
+  const snapshots: ScrollSnapshot[] = [
+    { left: window.scrollX, target: window, top: window.scrollY },
+  ];
+  const root = document.scrollingElement;
+  if (root) {
+    snapshots.push({ left: root.scrollLeft, target: root, top: root.scrollTop });
+  }
+  document.querySelectorAll<HTMLElement>('*').forEach((element) => {
+    const style = window.getComputedStyle(element);
+    const canScrollY = /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight;
+    const canScrollX = /(auto|scroll)/.test(style.overflowX) && element.scrollWidth > element.clientWidth;
+    if (canScrollY || canScrollX) {
+      snapshots.push({ left: element.scrollLeft, target: element, top: element.scrollTop });
+    }
+  });
+  return snapshots;
+}
+
+async function restoreScrollSnapshot(snapshots: ScrollSnapshot[]) {
+  if (!snapshots.length || typeof window === 'undefined') {
+    return;
+  }
+  await nextTick();
+  window.requestAnimationFrame(() => {
+    snapshots.forEach((snapshot) => {
+      if (snapshot.target === window) {
+        window.scrollTo({ behavior: 'auto', left: snapshot.left, top: snapshot.top });
+      } else if (snapshot.target instanceof Element) {
+        snapshot.target.scrollTo({ behavior: 'auto', left: snapshot.left, top: snapshot.top });
+      }
+    });
+  });
+}
+
+async function load(options: unknown = {}) {
+  const preserveScroll = Boolean(
+    options && typeof options === 'object' && 'preserveScroll' in options && (options as { preserveScroll?: boolean }).preserveScroll,
+  );
+  const snapshots = preserveScroll ? captureScrollSnapshot() : [];
   loading.value = true;
   try {
     rows.value = await listIssues(statusFilter.value, q.value.trim());
   } finally {
     loading.value = false;
+    await restoreScrollSnapshot(snapshots);
   }
 }
 
@@ -120,6 +174,7 @@ async function submit() {
     return;
   }
   submitting.value = true;
+  blurActiveElement();
   try {
     await createIssue(form.value);
     form.value = {
@@ -133,7 +188,7 @@ async function submit() {
       title: '',
     };
     message.success('在线记录已提交，运维人员会在处理台跟进');
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     submitting.value = false;
   }
@@ -153,10 +208,11 @@ async function beforeUpload(file: File) {
 
 async function accept(id: number) {
   accepting.value[id] = true;
+  blurActiveElement();
   try {
     await acceptIssue(id);
     message.success('已受理在线记录');
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     accepting.value[id] = false;
   }
@@ -164,10 +220,11 @@ async function accept(id: number) {
 
 async function markStatus(id: number, status: string) {
   statusChanging.value[id] = true;
+  blurActiveElement();
   try {
     await changeIssueStatus(id, status);
     message.success('状态已更新');
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     statusChanging.value[id] = false;
   }
@@ -180,11 +237,12 @@ async function handle(id: number) {
     return;
   }
   handling.value[id] = true;
+  blurActiveElement();
   try {
     await handleIssue(id, text);
     solution.value[id] = '';
     message.success('处理结果已提交，记录已关闭');
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     handling.value[id] = false;
   }
@@ -205,7 +263,7 @@ async function submitKnowledgeCandidate(id: number) {
   try {
     const result = await createIssueKnowledgeCandidate(id);
     message.success(`已提交知识候选：${result.title}`);
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     candidateSubmitting.value[id] = false;
   }
@@ -229,7 +287,7 @@ async function submitFeedback() {
     });
     feedbackOpen.value = false;
     message.success('满意度评价已提交，感谢反馈');
-    await load();
+    await load({ preserveScroll: true });
   } finally {
     feedbackSubmitting.value = false;
   }
