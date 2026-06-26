@@ -30,10 +30,22 @@ load_env_defaults() {
 load_env_defaults
 
 BACKEND_HOST="${BACKEND_HOST:-127.0.0.1}"
+BACKEND_PORT_EXPLICIT=0
+if [[ -n "${BACKEND_PORT:-}" ]]; then
+  BACKEND_PORT_EXPLICIT=1
+fi
 BACKEND_PORT="${BACKEND_PORT:-8010}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
+FRONTEND_PORT_EXPLICIT=0
+if [[ -n "${FRONTEND_PORT:-}" ]]; then
+  FRONTEND_PORT_EXPLICIT=1
+fi
 FRONTEND_PORT="${FRONTEND_PORT:-5666}"
 VLLM_HOST="${OPS_VLLM_HOST:-127.0.0.1}"
+VLLM_PORT_EXPLICIT=0
+if [[ -n "${OPS_VLLM_PORT:-}" ]]; then
+  VLLM_PORT_EXPLICIT=1
+fi
 VLLM_PORT="${OPS_VLLM_PORT:-8000}"
 MODEL_PATH="${OPS_MODEL_PATH:-models/qwen3-1.7b}"
 SERVED_MODEL_NAME="${OPS_VLLM_MODEL_NAME:-qwen3-1.7b}"
@@ -282,15 +294,92 @@ pids_on_port() {
   if ! command -v ss >/dev/null 2>&1; then
     return 0
   fi
-  ss -ltnp "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true
+  ss -H -ltnp "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true
+}
+
+port_listener_lines() {
+  local port="$1"
+  if ! command -v ss >/dev/null 2>&1; then
+    return 0
+  fi
+  ss -H -ltnpe "sport = :$port" 2>/dev/null || ss -H -ltnp "sport = :$port" 2>/dev/null || true
+}
+
+port_bindable() {
+  local host="$1" port="$2"
+  "$PYTHON_BIN" - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+sys.exit(0)
+PY
+}
+
+log_port_listeners() {
+  local port="$1" label="$2" lines
+  lines="$(port_listener_lines "$port")"
+  if [[ -n "$lines" ]]; then
+    log "$label port $port listener(s):"
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && log "  $line"
+    done <<<"$lines"
+  else
+    log "$label port $port is not bindable, but listener details are not visible."
+  fi
+}
+
+resolve_bind_port() {
+  local var_name="$1" explicit="$2" label="$3" host="$4" candidates="$5"
+  local candidate current
+  current="${!var_name}"
+  if port_bindable "$host" "$current"; then
+    return 0
+  fi
+  if [[ "$explicit" == 1 ]]; then
+    log "$label port $current is already in use."
+    log_port_listeners "$current" "$label"
+    log "请释放该端口，或改用其他端口后重新启动。"
+    exit 1
+  fi
+  for candidate in $candidates; do
+    [[ "$candidate" == "$current" ]] && continue
+    if port_bindable "$host" "$candidate"; then
+      log "default $label port $current is unavailable; using $candidate"
+      printf -v "$var_name" '%s' "$candidate"
+      export "$var_name"
+      return 0
+    fi
+  done
+  log "未找到可用 $label 端口。请手动指定端口后重新启动。"
+  exit 1
+}
+
+resolve_backend_port() {
+  resolve_bind_port BACKEND_PORT "$BACKEND_PORT_EXPLICIT" backend "$BACKEND_HOST" "$(seq 8010 8039) $(seq 18010 18039)"
+}
+
+resolve_frontend_port() {
+  resolve_bind_port FRONTEND_PORT "$FRONTEND_PORT_EXPLICIT" frontend "$FRONTEND_HOST" "$(seq 5666 5699) $(seq 15666 15699)"
+}
+
+resolve_vllm_port() {
+  resolve_bind_port VLLM_PORT "$VLLM_PORT_EXPLICIT" vLLM "$VLLM_HOST" "$(seq 8000 8029) $(seq 18000 18029)"
+  export OPS_VLLM_PORT="$VLLM_PORT"
 }
 
 ensure_port_available() {
-  local port="$1" label="$2" pids pid blockers=()
+  local port="$1" label="$2" pids pid remaining_listeners blockers=()
   mapfile -t pids < <(pids_on_port "$port")
-  if [[ "${#pids[@]}" -eq 0 ]]; then
-    return 0
-  fi
 
   for pid in "${pids[@]}"; do
     if pid_is_project_owned "$pid"; then
@@ -299,12 +388,14 @@ ensure_port_available() {
       blockers+=("$pid")
     fi
   done
-  sleep 1
-  for pid in "${pids[@]}"; do
-    if pid_is_project_owned "$pid"; then
-      kill_pid_if_alive "$pid" "$label port $port"
-    fi
-  done
+  if [[ "${#pids[@]}" -gt 0 ]]; then
+    sleep 1
+    for pid in "${pids[@]}"; do
+      if pid_is_project_owned "$pid"; then
+        kill_pid_if_alive "$pid" "$label port $port"
+      fi
+    done
+  fi
 
   mapfile -t pids < <(pids_on_port "$port")
   blockers=()
@@ -313,11 +404,15 @@ ensure_port_available() {
       blockers+=("$pid")
     fi
   done
-  if [[ "${#blockers[@]}" -gt 0 ]]; then
+  remaining_listeners="$(port_listener_lines "$port")"
+  if [[ "${#blockers[@]}" -gt 0 || -n "$remaining_listeners" ]]; then
     log "$label port $port is already in use by non-project process(es): ${blockers[*]}"
     for pid in "${blockers[@]}"; do
       ps -fp "$pid" || true
     done
+    if [[ -n "$remaining_listeners" ]]; then
+      log_port_listeners "$port" "$label"
+    fi
     log "请先释放端口或修改环境变量：BACKEND_PORT / FRONTEND_PORT / OPS_VLLM_PORT。"
     exit 1
   fi
@@ -472,6 +567,12 @@ log "NCCL config for vLLM: NCCL_IB_DISABLE=$NCCL_IB_DISABLE, NCCL_NET=$NCCL_NET,
 
 log "stopping existing project processes..."
 BACKEND_PORT="$BACKEND_PORT" FRONTEND_PORT="$FRONTEND_PORT" OPS_VLLM_PORT="$VLLM_PORT" "$ROOT_DIR/scripts/stop_all.sh"
+resolve_backend_port
+if [[ "$START_FRONTEND" == 1 ]]; then resolve_frontend_port; fi
+resolve_vllm_port
+log "backend endpoint: http://$BACKEND_HOST:$BACKEND_PORT"
+if [[ "$START_FRONTEND" == 1 ]]; then log "frontend endpoint: http://$FRONTEND_HOST:$FRONTEND_PORT"; fi
+log "vLLM endpoint: http://$VLLM_HOST:$VLLM_PORT/v1"
 ensure_port_available "$BACKEND_PORT" backend
 if [[ "$START_FRONTEND" == 1 ]]; then ensure_port_available "$FRONTEND_PORT" frontend; fi
 ensure_port_available "$VLLM_PORT" vLLM

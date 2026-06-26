@@ -21,6 +21,16 @@ ISSUE_CATEGORY_KEYWORDS = {
     "business": ["系统", "应用", "页面", "业务", "接口", "访问慢", "报错"],
     "database": ["数据库", "mysql", "oracle", "redis", "连接池", "sql", "中间件"],
 }
+BUSINESS_INCIDENT_KEYWORDS = [
+    "业务系统", "审批", "报销", "门户", "页面", "接口", "白屏", "500", "502", "504", "5xx", "系统故障",
+]
+NETWORK_CONNECTED_PATTERNS = [
+    re.compile(pattern, flags=re.I)
+    for pattern in [
+        r"vpn\s*(能|可以|已).{0,4}(连|连接|接入)",
+        r"(能|可以|已).{0,4}(连|连接|接入).{0,4}vpn",
+    ]
+]
 HIGH_PRIORITY_KEYWORDS = [
     "生产", "全公司", "全部", "大面积", "中断", "无法访问", "宕机", "紧急", "批量", "高优先级",
     "多人", "多名", "多个用户", "同部门", "部门多人", "业务截止",
@@ -40,14 +50,36 @@ RAG_EVAL_CASES = [
 ]
 
 
+def classify_issue_category(text: str) -> str:
+    lowered = text.lower()
+    scores = {category: 0 for category in ISSUE_CATEGORY_KEYWORDS}
+    for category, keywords in ISSUE_CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword.lower() in lowered or keyword in text:
+                scores[category] += 1
+
+    if re.search(r"\b5\d{2}\b", text):
+        scores["business"] += 4
+    for keyword in BUSINESS_INCIDENT_KEYWORDS:
+        if keyword.lower() in lowered or keyword in text:
+            scores["business"] += 2
+    if any(pattern.search(text) for pattern in NETWORK_CONNECTED_PATTERNS):
+        scores["network"] = max(0, scores["network"] - 2)
+        scores["business"] += 1
+    if any(keyword in lowered for keyword in ["mysql", "oracle", "redis", "sql"]) or "数据库" in text:
+        scores["database"] += 3
+    if any(keyword in text for keyword in ["权限", "账号", "账户"]) and not any(keyword in text for keyword in ["页面", "接口", "500", "白屏"]):
+        scores["account"] += 2
+
+    if max(scores.values()) <= 0:
+        return "general"
+    priority_order = {"database": 4, "business": 3, "account": 2, "network": 1}
+    return max(scores, key=lambda category: (scores[category], priority_order.get(category, 0)))
+
+
 def build_issue_draft_by_rules(description: str) -> dict[str, Any]:
     text = description.strip()
-    lowered = text.lower()
-    category = "general"
-    for item, keywords in ISSUE_CATEGORY_KEYWORDS.items():
-        if any(keyword in lowered or keyword in text for keyword in keywords):
-            category = item
-            break
+    category = classify_issue_category(text)
     priority = "medium"
     if any(keyword in text for keyword in HIGH_PRIORITY_KEYWORDS):
         priority = "high"
@@ -62,18 +94,27 @@ def build_issue_draft_by_rules(description: str) -> dict[str, Any]:
         if any(mark in line.lower() for mark in ["error", "exception", "failed", "timeout", "traceback", "报错", "失败", "超时"])
     ]
     impact_scope = ""
+    numbered_scope = re.search(r"(\d+\s*(?:位|名|个).{0,8}(?:同事|用户|人员|员工))", text)
+    if numbered_scope:
+        impact_scope = numbered_scope.group(1).strip()
     for marker in ["影响范围", "影响", "范围"]:
+        if impact_scope:
+            break
         match = re.search(rf"{marker}[:：]?\s*([^。；;\n]+)", text)
         if match:
-            impact_scope = match.group(1).strip()
+            candidate = match.group(1).strip()
+            if not re.match(r"^(?:上午|下午|今天|明天|\d{1,2}[:：]\d{2})", candidate):
+                impact_scope = candidate
             break
     if not impact_scope:
         if any(keyword in text for keyword in ["全公司", "全部用户", "大面积"]):
             impact_scope = "全公司/大面积影响"
-        elif any(keyword in text for keyword in ["部门", "多人", "批量"]):
+        elif any(keyword in text for keyword in ["部门", "多人", "多位", "批量"]):
             impact_scope = "部门或多人受影响"
         elif any(keyword in text for keyword in ["我", "单人", "个人"]):
             impact_scope = "单人受影响"
+    if priority == "medium" and (numbered_scope or any(keyword in text for keyword in ["多人", "多位", "业务截止", "截止时间"])):
+        priority = "high"
 
     title = re.split(r"[。；;\n]", text)[0][:40] or "在线记录"
     missing_fields = []
@@ -284,6 +325,35 @@ def strip_inline_reference_section(answer: str) -> str:
     return "\n".join(lines).rstrip()
 
 
+def sanitize_answer_for_plan(answer: str, answer_plan: dict[str, Any]) -> str:
+    cleaned = str(answer or "").strip()
+    if answer_plan.get("mode") != "case_matched_incident_judgement":
+        return cleaned
+
+    lines = cleaned.splitlines()
+    output: list[str] = []
+    skipping_duplicate_operator_tail = False
+    for line in lines:
+        normalized = re.sub(r"[\s*#：:]+", "", line.strip())
+        if normalized == "运维执行":
+            skipping_duplicate_operator_tail = True
+            continue
+        if skipping_duplicate_operator_tail:
+            continue
+        output.append(line)
+    cleaned = "\n".join(output).rstrip()
+    cleaned = re.sub(
+        r"\n?[*#\s]*注意事项[*#\s]*[:：]\s*.*?(?:知识入库|发布前|敏感信息检查|重复检查).*?$",
+        "",
+        cleaned,
+        flags=re.S,
+    ).rstrip()
+    primary_sections = (answer_plan.get("primary_evidence") or {}).get("available_sections") or []
+    if "重启" not in json.dumps(answer_plan.get("primary_evidence") or {}, ensure_ascii=False) and "重启" not in "".join(primary_sections):
+        cleaned = re.sub(r"([、，,或和及]*)服务重启", "", cleaned)
+    return cleaned
+
+
 def parse_message_metadata(value: str) -> dict[str, Any]:
     try:
         parsed = json.loads(value or "{}")
@@ -476,6 +546,7 @@ def ask_question(data: QuestionRequest, user: dict[str, Any]) -> dict[str, Any]:
     answer = model_result["content"]
     if refs:
         answer = strip_inline_reference_section(answer)
+    answer = sanitize_answer_for_plan(answer, answer_plan)
     need_human = decision["need_human"]
     if need_human:
         if result.high_risk:

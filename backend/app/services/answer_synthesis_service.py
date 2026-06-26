@@ -33,6 +33,16 @@ OPERATOR_ACTION_KEYWORDS = [
     "接口日志",
     "应用日志",
 ]
+INTERNAL_GOVERNANCE_KEYWORDS = [
+    "处理知识中",
+    "知识中不能",
+    "知识入库",
+    "发布前",
+    "敏感信息检查",
+    "重复检查",
+    "知识审核",
+    "知识候选",
+]
 
 
 def _compact_text(value: Any, limit: int = 360) -> str:
@@ -55,6 +65,16 @@ def _split_sentences(text: str) -> list[str]:
     ]
 
 
+def _clean_evidence_value(value: str) -> str:
+    sentences = _split_sentences(value)
+    visible = [
+        sentence
+        for sentence in sentences
+        if not any(keyword in sentence for keyword in INTERNAL_GOVERNANCE_KEYWORDS)
+    ]
+    return _compact_text(" ".join(visible) if visible else value, 520)
+
+
 def extract_evidence_sections(content: str) -> dict[str, str]:
     """Extract common operations-knowledge sections from semi-structured Chinese text."""
     pattern = re.compile(rf"({'|'.join(re.escape(name) for name in SECTION_NAMES)})\s*[:：]")
@@ -65,14 +85,14 @@ def extract_evidence_sections(content: str) -> dict[str, str]:
             name = match.group(1)
             start = match.end()
             end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
-            value = _compact_text(content[start:end], 520)
+            value = _clean_evidence_value(content[start:end])
             if value:
                 sections[name] = value
         return sections
 
     sentences = _split_sentences(content)
     if sentences:
-        sections["摘要"] = _compact_text(" ".join(sentences[:3]), 520)
+        sections["摘要"] = _clean_evidence_value(" ".join(sentences[:3]))
     return sections
 
 
@@ -134,10 +154,21 @@ def build_response_plan(
         if _contains_any(question, keywords):
             mode = candidate
             break
+    primary_evidence = (evidence.get("items") or [{}])[0] if evidence.get("items") else {}
+    primary_sections = primary_evidence.get("sections") if isinstance(primary_evidence, dict) else {}
+    primary_source_type = str(primary_evidence.get("source_type", "") if isinstance(primary_evidence, dict) else "")
+    primary_score = float(primary_evidence.get("score", 0) or 0) if isinstance(primary_evidence, dict) else 0.0
     if not references or float(getattr(retrieval, "confidence", 0.0)) < 0.08:
         mode = "clarification_first"
     elif bool(getattr(retrieval, "high_risk", False)):
         mode = "controlled_handoff"
+    elif (
+        mode in {"diagnostic_judgement", "incident_handoff", "concise_resolution"}
+        and primary_source_type in {"case", "runbook"}
+        and primary_score >= 0.45
+        and any(primary_sections.get(name) for name in ["现象", "原因", "处理步骤", "恢复方式", "注意事项"])
+    ):
+        mode = "case_matched_incident_judgement"
     elif mode == "concise_resolution" and decision.get("need_human"):
         mode = "incident_handoff"
 
@@ -156,6 +187,11 @@ def build_response_plan(
             "purpose": "Judge the most likely issue type and explain the evidence.",
             "sections": ["判断", "依据", "现在先做", "是否提交在线记录"],
             "style": "reasoned judgement first; avoid long checklists",
+        },
+        "case_matched_incident_judgement": {
+            "purpose": "Use the primary matched case to judge the incident and make the knowledge-base change visible.",
+            "sections": ["判断", "命中案例", "用户现在做", "运维处理方向", "是否提交在线记录"],
+            "style": "case-grounded triage; focus end-user actions on evidence collection and online-record submission; explicitly separate operations-staff actions",
         },
         "self_service_steps": {
             "purpose": "Give practical steps separated by user actions and operations-staff actions.",
@@ -186,11 +222,25 @@ def build_response_plan(
             "Do not include a missing-information section when no important field is missing.",
             "Do not mechanically repeat all retrieved references.",
             "Do not add a stock closing sentence unless this plan explicitly asks for handoff guidance.",
+            "Do not place rollback, gateway cache cleanup, release changes, service restarts, or server-side log inspection under end-user actions.",
         ],
-        "append_handoff_hint": mode in {"diagnostic_judgement", "incident_handoff"} and bool(decision.get("need_human")),
+        "append_handoff_hint": mode in {"diagnostic_judgement", "case_matched_incident_judgement", "incident_handoff"} and bool(decision.get("need_human")),
         "missing_fields": decision.get("missing_fields", []),
         "intent": decision.get("intent") or intent_route.get("intent") or draft.get("category", "general"),
     }
-    if _contains_any(" ".join(_section_lines((evidence.get("items") or [{}])[0].get("sections", {}))), OPERATOR_ACTION_KEYWORDS):
+    if primary_evidence:
+        plan["primary_evidence"] = {
+            "title": primary_evidence.get("title", ""),
+            "source_type": primary_source_type,
+            "score": round(primary_score, 4),
+            "available_sections": [name for name in ["现象", "原因", "处理步骤", "恢复方式", "注意事项", "摘要"] if primary_sections.get(name)],
+        }
+    if mode == "case_matched_incident_judgement" and decision.get("risk_level") == "high":
+        plan["case_mode_rule"] = (
+            "For a high-impact matched incident, user actions should emphasize submitting an online record and collecting "
+            "time, URL, screenshot, error code, impact scope, and business deadline. Do not suggest repeated local browser "
+            "troubleshooting unless the primary case explicitly requires it."
+        )
+    if _contains_any(" ".join(_section_lines(primary_sections or {})), OPERATOR_ACTION_KEYWORDS):
         plan["operator_action_rule"] = "Mark rollback, cache cleanup, log inspection, restart, permission, and production changes as operations-staff actions."
     return plan
