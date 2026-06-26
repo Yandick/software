@@ -108,6 +108,27 @@ class AccountApprovalDecision(BaseModel):
     reason: str = ""
 
 
+class StaffUserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=6, max_length=256)
+    real_name: str = Field(min_length=1, max_length=128)
+    role: str = "ops"
+    department: str = "运维中心"
+    status: str = "active"
+
+
+class StaffUserUpdate(BaseModel):
+    username: str | None = Field(default=None, min_length=1, max_length=128)
+    real_name: str | None = Field(default=None, min_length=1, max_length=128)
+    role: str | None = None
+    department: str | None = None
+    status: str | None = None
+
+
+class StaffUserPasswordReset(BaseModel):
+    password: str = Field(min_length=6, max_length=256)
+
+
 class MenuMeta(BaseModel):
     title: str
     icon: str | None = None

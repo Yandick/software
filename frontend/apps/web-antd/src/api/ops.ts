@@ -223,6 +223,16 @@ export interface AccountApprovalItem {
   status: string;
 }
 
+export interface StaffUserItem {
+  created_at?: string;
+  department?: string;
+  id: number;
+  real_name: string;
+  role: string;
+  status: string;
+  username: string;
+}
+
 export interface CsvExportResponse {
   content: string;
   count?: number;
@@ -449,6 +459,30 @@ export function assistIssue(id: number) {
 
 export function createIssueKnowledgeCandidate(id: number) {
   return requestClient.post<KnowledgeItem>(`/issues/${id}/knowledge-candidate`);
+}
+
+export function listStaffUsers(q = '', role = '', status = '') {
+  return requestClient.get<StaffUserItem[]>('/staff-users', { params: { q, role, status } });
+}
+
+export function createStaffUser(data: ApiPayload) {
+  return requestClient.post<StaffUserItem>('/staff-users', data);
+}
+
+export function updateStaffUser(id: number, data: ApiPayload) {
+  return requestClient.put<StaffUserItem>(`/staff-users/${id}`, data);
+}
+
+export function freezeStaffUser(id: number) {
+  return requestClient.post<StaffUserItem>(`/staff-users/${id}/freeze`);
+}
+
+export function unfreezeStaffUser(id: number) {
+  return requestClient.post<StaffUserItem>(`/staff-users/${id}/unfreeze`);
+}
+
+export function resetStaffUserPassword(id: number, password: string) {
+  return requestClient.post<{ id: number; password_reset: boolean }>(`/staff-users/${id}/reset-password`, { password });
 }
 
 export function listAccounts(q = '') {

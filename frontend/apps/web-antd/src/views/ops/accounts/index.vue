@@ -8,14 +8,37 @@ import { message, Modal } from 'ant-design-vue';
 import {
   createAccountApproval,
   createAccount,
+  createStaffUser,
   decideAccountApproval,
   exportAccounts,
+  freezeStaffUser,
   listAccountApprovals,
   listAccounts,
+  listStaffUsers,
+  resetStaffUserPassword,
+  unfreezeStaffUser,
+  updateStaffUser,
 } from '#/api/ops';
 import { useAutoRefresh } from '#/composables/use-auto-refresh';
 
 const userStore = useUserStore();
+const staffRoleOptions = [
+  { label: '管理员', value: 'admin' },
+  { label: '运维人员', value: 'ops' },
+  { label: '审计员', value: 'auditor' },
+];
+const staffStatusOptions = [
+  { label: '启用', value: 'active' },
+  { label: '冻结', value: 'frozen' },
+];
+const defaultStaffForm = () => ({
+  department: '运维中心',
+  password: '',
+  real_name: '',
+  role: 'ops',
+  status: 'active',
+  username: '',
+});
 const defaultAccountForm = () => ({
   account_name: '',
   contact_phone: '',
@@ -26,6 +49,17 @@ const defaultAccountForm = () => ({
   remark: '',
   risk_level: 'medium',
 });
+const staffForm = ref(defaultStaffForm());
+const staffEditForm = ref({ department: '', id: 0, real_name: '', role: 'ops', status: 'active', username: '' });
+const staffPasswordForm = ref({ id: 0, password: '', username: '' });
+const staffRows = ref<any[]>([]);
+const staffQ = ref('');
+const staffRoleFilter = ref('');
+const staffStatusFilter = ref('');
+const staffSubmitting = ref(false);
+const staffEditOpen = ref(false);
+const staffPasswordOpen = ref(false);
+const staffPasswordSubmitting = ref(false);
 const form = ref(defaultAccountForm());
 const editForm = ref({ ...defaultAccountForm(), id: 0, status: 'active' });
 const rows = ref<any[]>([]);
@@ -46,11 +80,22 @@ const expiringAccounts = computed(() =>
   rows.value.filter((item) => ['expired', 'expiring', 'invalid'].includes(item.expiry_status)),
 );
 const heroMetrics = computed(() => [
-  { label: '账号总数', value: rows.value.length },
-  { label: '启用账号', value: rows.value.filter((item) => item.status === 'active').length },
+  { label: '工作人员', value: staffRows.value.length },
+  { label: '启用工作人员', value: staffRows.value.filter((item) => item.status === 'active').length },
+  { label: '资源账号', value: rows.value.length },
   { label: '待审批', value: approvals.value.filter((item) => item.status === 'pending').length },
 ]);
 useAutoRefresh(load, 20000);
+
+const staffColumns = [
+  { title: '登录账号', dataIndex: 'username' },
+  { title: '姓名', dataIndex: 'real_name' },
+  { title: '角色', dataIndex: 'role' },
+  { title: '部门', dataIndex: 'department' },
+  { title: '状态', dataIndex: 'status' },
+  { title: '创建时间', dataIndex: 'created_at' },
+  { title: '操作', key: 'action', width: 300 },
+];
 
 const columns = [
   { title: '账号名', dataIndex: 'account_name' },
@@ -68,10 +113,12 @@ const columns = [
 async function load() {
   loading.value = true;
   try {
-    const [accountRows, approvalRows] = await Promise.all([
+    const [staffUserRows, accountRows, approvalRows] = await Promise.all([
+      listStaffUsers(staffQ.value.trim(), staffRoleFilter.value, staffStatusFilter.value),
       listAccounts(q.value.trim()),
       listAccountApprovals(approvalStatus.value),
     ]);
+    staffRows.value = staffUserRows;
     rows.value = accountRows;
     approvals.value = approvalRows;
   } finally {
@@ -79,9 +126,139 @@ async function load() {
   }
 }
 
+function isOwnStaff(record: any) {
+  return Number(record.id) === Number(userStore.userInfo?.userId);
+}
+
+function staffRoleText(role: string) {
+  const item = staffRoleOptions.find((option) => option.value === role);
+  return item?.label || role || '未设置';
+}
+
+function staffStatusColor(status: string) {
+  return status === 'active' ? 'green' : 'red';
+}
+
+function staffStatusText(status: string) {
+  return status === 'active' ? '启用' : '冻结';
+}
+
+async function submitStaffUser() {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以创建工作人员登录账号');
+    return;
+  }
+  if (!staffForm.value.username.trim() || !staffForm.value.password.trim() || !staffForm.value.real_name.trim()) {
+    message.warning('请填写登录账号、初始密码和姓名');
+    return;
+  }
+  staffSubmitting.value = true;
+  try {
+    await createStaffUser(staffForm.value);
+    staffForm.value = defaultStaffForm();
+    message.success('工作人员登录账号已创建');
+    await load();
+  } finally {
+    staffSubmitting.value = false;
+  }
+}
+
+function openStaffEdit(record: any) {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以修改工作人员登录账号');
+    return;
+  }
+  staffEditForm.value = {
+    department: record.department || '',
+    id: record.id,
+    real_name: record.real_name || '',
+    role: record.role || 'ops',
+    status: record.status || 'active',
+    username: record.username || '',
+  };
+  staffEditOpen.value = true;
+}
+
+async function saveStaffEdit() {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以修改工作人员登录账号');
+    return;
+  }
+  await updateStaffUser(staffEditForm.value.id, {
+    department: staffEditForm.value.department,
+    real_name: staffEditForm.value.real_name,
+    role: staffEditForm.value.role,
+    status: staffEditForm.value.status,
+    username: staffEditForm.value.username,
+  });
+  staffEditOpen.value = false;
+  message.success('工作人员登录账号已更新');
+  await load();
+}
+
+function confirmFreezeStaff(record: any) {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以冻结工作人员登录账号');
+    return;
+  }
+  Modal.confirm({
+    content: `冻结 ${record.username} 后，该账号将不能登录工作人员管理台。`,
+    okText: '确认冻结',
+    okType: 'danger',
+    onOk: async () => {
+      await freezeStaffUser(record.id);
+      message.success('工作人员登录账号已冻结');
+      await load();
+    },
+    title: '冻结工作人员登录账号？',
+  });
+}
+
+function confirmUnfreezeStaff(record: any) {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以解冻工作人员登录账号');
+    return;
+  }
+  Modal.confirm({
+    content: `解冻 ${record.username} 后，该账号可以重新登录工作人员管理台。`,
+    okText: '确认解冻',
+    onOk: async () => {
+      await unfreezeStaffUser(record.id);
+      message.success('工作人员登录账号已解冻');
+      await load();
+    },
+    title: '解冻工作人员登录账号？',
+  });
+}
+
+function openStaffPassword(record: any) {
+  if (!isAdmin.value) {
+    message.warning('只有管理员可以重置工作人员登录账号密码');
+    return;
+  }
+  staffPasswordForm.value = { id: record.id, password: '', username: record.username };
+  staffPasswordOpen.value = true;
+}
+
+async function resetStaffPassword() {
+  if (!staffPasswordForm.value.password.trim()) {
+    message.warning('请填写新密码');
+    return;
+  }
+  staffPasswordSubmitting.value = true;
+  try {
+    await resetStaffUserPassword(staffPasswordForm.value.id, staffPasswordForm.value.password);
+    staffPasswordOpen.value = false;
+    staffPasswordForm.value = { id: 0, password: '', username: '' };
+    message.success('工作人员登录账号密码已重置');
+  } finally {
+    staffPasswordSubmitting.value = false;
+  }
+}
+
 async function submit() {
   if (!isAdmin.value) {
-    message.warning('只有管理员可以新增运维账号');
+    message.warning('只有管理员可以新增运维资源账号');
     return;
   }
   if (!form.value.account_name.trim()) {
@@ -92,7 +269,7 @@ async function submit() {
   try {
     await createAccount(form.value);
     form.value = defaultAccountForm();
-    message.success('运维账号已创建');
+    message.success('运维资源账号已创建');
     await load();
   } finally {
     submitting.value = false;
@@ -137,10 +314,10 @@ async function saveEdit() {
       risk_level: editForm.value.risk_level,
       status: editForm.value.status,
     },
-    reason: '申请修改运维账号信息',
+    reason: '申请修改运维资源账号信息',
   });
   editOpen.value = false;
-  message.success('账号修改已提交审批，审批通过后生效');
+  message.success('资源账号修改已提交审批，审批通过后生效');
   await load();
 }
 
@@ -158,7 +335,7 @@ function confirmFreeze(record: any) {
         account_id: record.id,
         action: 'freeze',
         payload: {},
-        reason: '申请冻结运维账号',
+        reason: '申请冻结运维资源账号',
       });
       message.success('冻结申请已提交审批');
       await load();
@@ -180,7 +357,7 @@ function confirmUnfreeze(record: any) {
         account_id: record.id,
         action: 'unfreeze',
         payload: {},
-        reason: '申请解冻运维账号',
+        reason: '申请解冻运维资源账号',
       });
       message.success('解冻申请已提交审批');
       await load();
@@ -206,7 +383,7 @@ function isOwnApproval(record: any) {
 
 async function downloadAccounts() {
   if (!canExport.value) {
-    message.warning('只有管理员或审计员可以导出账号清单');
+    message.warning('只有管理员或审计员可以导出资源账号清单');
     return;
   }
   exportLoading.value = true;
@@ -305,9 +482,9 @@ onMounted(load);
   <div class="account-page p-5">
     <div class="ops-hero mb-5">
       <div class="ops-kicker">Account Console</div>
-      <h1>运维账号管理</h1>
+      <h1>工作人员与资源账号管理</h1>
       <p>
-        账号新增由管理员执行；冻结、解冻和修改属于高风险操作，必须先提交审批，审批通过后才会真正生效。
+        分开维护工作人员登录账号和运维资源账号。登录账号用于进入管理台，资源账号用于记录业务系统、堡垒机、数据库等运维授权对象。
       </p>
       <div class="ops-hero-metrics">
         <span v-for="item in heroMetrics" :key="item.label">
@@ -321,21 +498,101 @@ onMounted(load);
       v-if="!isAdmin"
       class="mb-5"
       message="当前账号没有账号变更权限"
-      description="当前角色可查看账号信息；新增需管理员权限，修改、冻结、解冻需提交审批并写入审计日志。"
+      description="当前角色可查看账号信息；工作人员登录账号变更需管理员权限，资源账号修改、冻结、解冻需提交审批并写入审计日志。"
       show-icon
       type="info"
     />
 
+    <a-card title="工作人员登录账号">
+      <div class="mb-4 text-sm text-slate-500">
+        管理可登录工作人员管理台的账号。创建时设置初始密码；冻结后账号不能登录；重置密码会写入审计日志。
+      </div>
+      <div class="grid gap-4 md:grid-cols-3">
+        <a-input v-model:value="staffForm.username" :disabled="!isAdmin" placeholder="登录账号，如 ops_lisi" />
+        <a-input-password v-model:value="staffForm.password" :disabled="!isAdmin" placeholder="初始密码，至少 6 位" />
+        <a-input v-model:value="staffForm.real_name" :disabled="!isAdmin" placeholder="姓名" />
+        <a-input v-model:value="staffForm.department" :disabled="!isAdmin" placeholder="所属部门" />
+        <a-select v-model:value="staffForm.role" :disabled="!isAdmin" placeholder="角色">
+          <a-select-option v-for="item in staffRoleOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-select v-model:value="staffForm.status" :disabled="!isAdmin" placeholder="状态">
+          <a-select-option v-for="item in staffStatusOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+      </div>
+      <a-button class="mt-4" :disabled="!isAdmin" :loading="staffSubmitting" type="primary" @click="submitStaffUser">
+        创建登录账号
+      </a-button>
+
+      <div class="mt-5 mb-4 flex flex-wrap items-center gap-3">
+        <a-input-search
+          v-model:value="staffQ"
+          allow-clear
+          class="max-w-lg"
+          placeholder="搜索登录账号、姓名、部门、角色或状态"
+          @search="load"
+        />
+        <a-select v-model:value="staffRoleFilter" allow-clear class="w-36" placeholder="角色" @change="load">
+          <a-select-option v-for="item in staffRoleOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-select v-model:value="staffStatusFilter" allow-clear class="w-36" placeholder="状态" @change="load">
+          <a-select-option v-for="item in staffStatusOptions" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-select-option>
+        </a-select>
+        <a-tag color="blue">自动刷新中</a-tag>
+      </div>
+
+      <a-table :columns="staffColumns" :data-source="staffRows" :loading="loading" row-key="id" :scroll="{ x: 980 }">
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.dataIndex === 'role'">
+            <a-tag color="geekblue">{{ staffRoleText(record.role) }}</a-tag>
+          </template>
+          <template v-if="column.dataIndex === 'status'">
+            <a-tag :color="staffStatusColor(record.status)">{{ staffStatusText(record.status) }}</a-tag>
+          </template>
+          <template v-if="column.key === 'action'">
+            <a-space wrap>
+              <a-button :disabled="!isAdmin" size="small" @click="openStaffEdit(record)">修改</a-button>
+              <a-button :disabled="!isAdmin" size="small" @click="openStaffPassword(record)">重置密码</a-button>
+              <a-button
+                v-if="record.status === 'active'"
+                :disabled="!isAdmin || isOwnStaff(record)"
+                danger
+                size="small"
+                @click="confirmFreezeStaff(record)"
+              >
+                冻结
+              </a-button>
+              <a-button
+                v-else
+                :disabled="!isAdmin"
+                size="small"
+                @click="confirmUnfreezeStaff(record)"
+              >
+                解冻
+              </a-button>
+            </a-space>
+          </template>
+        </template>
+      </a-table>
+    </a-card>
+
     <a-alert
       v-if="expiringAccounts.length"
-      class="mb-5"
+      class="mt-5 mb-5"
       :message="`发现 ${expiringAccounts.length} 个账号即将到期、已过期或有效期格式异常`"
-      description="请在账号列表中查看有效期标签，必要时提交修改审批或冻结审批，避免过期权限继续使用。"
+      description="请在运维资源账号列表中查看有效期标签，必要时提交修改审批或冻结审批，避免过期授权继续使用。"
       show-icon
       type="warning"
     />
 
-    <a-card title="新增运维账号">
+    <a-card title="新增运维资源账号">
       <div class="grid gap-4 md:grid-cols-3">
         <a-input v-model:value="form.account_name" :disabled="!isAdmin" placeholder="账号名，如 ops_zhangsan" />
         <a-input v-model:value="form.owner_name" :disabled="!isAdmin" placeholder="负责人姓名" />
@@ -355,13 +612,13 @@ onMounted(load);
       </a-button>
     </a-card>
 
-    <a-card class="mt-5" title="账号列表">
+    <a-card class="mt-5" title="运维资源账号列表">
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <a-input-search
           v-model:value="q"
           allow-clear
           class="max-w-lg"
-          placeholder="搜索账号名、负责人、部门、权限、风险或备注"
+          placeholder="搜索资源账号、负责人、部门、权限、风险或备注"
           @search="load"
         />
         <a-button :disabled="!canExport" :loading="exportLoading" @click="downloadAccounts">
@@ -402,7 +659,7 @@ onMounted(load);
       </a-table>
     </a-card>
 
-    <a-card class="mt-5" title="账号操作审批">
+    <a-card class="mt-5" title="资源账号操作审批">
       <div class="mb-4 flex flex-wrap items-center gap-3">
         <a-select v-model:value="approvalStatus" class="w-40" @change="load">
           <a-select-option value="pending">待审批</a-select-option>
@@ -447,7 +704,54 @@ onMounted(load);
       </a-table>
     </a-card>
 
-    <a-modal v-model:open="editOpen" title="修改运维账号" ok-text="提交审批" :width="720" @ok="saveEdit">
+    <a-modal v-model:open="staffEditOpen" title="修改工作人员登录账号" ok-text="保存" :width="720" @ok="saveStaffEdit">
+      <a-form layout="vertical">
+        <div class="grid gap-3 md:grid-cols-2">
+          <a-form-item label="登录账号">
+            <a-input v-model:value="staffEditForm.username" placeholder="登录账号" />
+          </a-form-item>
+          <a-form-item label="姓名">
+            <a-input v-model:value="staffEditForm.real_name" placeholder="姓名" />
+          </a-form-item>
+          <a-form-item label="所属部门">
+            <a-input v-model:value="staffEditForm.department" placeholder="所属部门" />
+          </a-form-item>
+          <a-form-item label="角色">
+            <a-select v-model:value="staffEditForm.role">
+              <a-select-option v-for="item in staffRoleOptions" :key="item.value" :value="item.value">
+                {{ item.label }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="状态">
+            <a-select v-model:value="staffEditForm.status">
+              <a-select-option v-for="item in staffStatusOptions" :key="item.value" :value="item.value">
+                {{ item.label }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+        </div>
+      </a-form>
+    </a-modal>
+
+    <a-modal
+      v-model:open="staffPasswordOpen"
+      :confirm-loading="staffPasswordSubmitting"
+      title="重置工作人员密码"
+      ok-text="重置密码"
+      @ok="resetStaffPassword"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="登录账号">
+          <a-input :value="staffPasswordForm.username" disabled />
+        </a-form-item>
+        <a-form-item label="新密码">
+          <a-input-password v-model:value="staffPasswordForm.password" placeholder="至少 6 位" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal v-model:open="editOpen" title="修改运维资源账号" ok-text="提交审批" :width="720" @ok="saveEdit">
       <a-form layout="vertical">
         <div class="grid gap-3 md:grid-cols-2">
           <a-form-item label="负责人">

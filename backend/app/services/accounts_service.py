@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -10,9 +11,21 @@ from fastapi import HTTPException
 
 from ..database import audit, connect, rows_to_dicts, utc_now, write_audit
 from ..deps import ensure_row_exists
-from ..schemas import AccountApprovalCreate, AccountApprovalDecision, AccountCreate, AccountUpdate
+from ..passwords import hash_password
+from ..schemas import (
+    AccountApprovalCreate,
+    AccountApprovalDecision,
+    AccountCreate,
+    AccountUpdate,
+    StaffUserCreate,
+    StaffUserPasswordReset,
+    StaffUserUpdate,
+)
 
 ACCOUNT_RISK_LEVELS = {"high", "low", "medium"}
+STAFF_ROLES = {"admin", "auditor", "ops"}
+STAFF_STATUSES = {"active", "frozen"}
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.@-]+$")
 ACCOUNT_UPDATE_FIELDS = {
     "contact_phone",
     "department",
@@ -40,6 +53,185 @@ def normalize_account_payload(action: str, payload: dict[str, Any]) -> dict[str,
 def validate_account_create(data: AccountCreate) -> None:
     if data.risk_level not in ACCOUNT_RISK_LEVELS:
         raise HTTPException(status_code=400, detail="账号风险等级只能是 low、medium 或 high")
+
+
+def validate_staff_username(username: str) -> str:
+    value = username.strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="用户名不能为空")
+    if not USERNAME_PATTERN.match(value):
+        raise HTTPException(status_code=400, detail="用户名只能包含字母、数字、点、下划线、短横线或 @")
+    return value
+
+
+def validate_staff_role(role: str) -> str:
+    value = role.strip()
+    if value not in STAFF_ROLES:
+        raise HTTPException(status_code=400, detail="工作人员角色只能是 admin、ops 或 auditor")
+    return value
+
+
+def validate_staff_status(status: str) -> str:
+    value = status.strip()
+    if value not in STAFF_STATUSES:
+        raise HTTPException(status_code=400, detail="工作人员账号状态只能是 active 或 frozen")
+    return value
+
+
+def staff_user_row_to_dict(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item.pop("password_hash", None)
+    return item
+
+
+def active_admin_count(conn: Any) -> int:
+    return int(conn.execute("select count(*) from users where role='admin' and status='active'").fetchone()[0])
+
+
+def ensure_staff_user_can_be_restricted(conn: Any, row: Any, user: dict[str, Any]) -> None:
+    if int(row["id"]) == int(user.get("id") or 0):
+        raise HTTPException(status_code=400, detail="不能冻结或降权当前登录账号")
+    if row["role"] == "admin" and row["status"] == "active" and active_admin_count(conn) <= 1:
+        raise HTTPException(status_code=400, detail="至少需要保留一个启用状态的管理员账号")
+
+
+def list_staff_users(q: str = "", role: str = "", status: str = "") -> list[dict[str, Any]]:
+    params: list[Any] = []
+    where = ["role in ('admin','ops','auditor')"]
+    if role:
+        where.append("role=?")
+        params.append(validate_staff_role(role))
+    if status:
+        where.append("status=?")
+        params.append(validate_staff_status(status))
+    if q:
+        where.append("(username like ? or real_name like ? or department like ? or role like ? or status like ?)")
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%"])
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            select id,username,real_name,role,department,status,created_at
+            from users
+            where {' and '.join(where)}
+            order by role='admin' desc, status='active' desc, id desc
+            """,
+            params,
+        ).fetchall()
+    return [staff_user_row_to_dict(row) for row in rows]
+
+
+def create_staff_user(data: StaffUserCreate, user: dict[str, Any]) -> dict[str, Any]:
+    username = validate_staff_username(data.username)
+    role = validate_staff_role(data.role)
+    status = validate_staff_status(data.status)
+    real_name = data.real_name.strip()
+    department = data.department.strip() or "运维中心"
+    if not real_name:
+        raise HTTPException(status_code=400, detail="请填写工作人员姓名")
+    now = utc_now()
+    with connect() as conn:
+        existing = conn.execute("select id from users where username=?", (username,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="用户名已存在")
+        cur = conn.execute(
+            """
+            insert into users(username,password_hash,real_name,role,department,status,created_at)
+            values(?,?,?,?,?,?,?)
+            """,
+            (username, hash_password(data.password), real_name, role, department, status, now),
+        )
+        staff_id = int(cur.lastrowid)
+        write_audit(conn, "staff_user_create", "user", f"{user.get('real_name','')}创建工作人员登录账号：{username} / {role}", staff_id)
+    return {
+        "created_at": now,
+        "department": department,
+        "id": staff_id,
+        "real_name": real_name,
+        "role": role,
+        "status": status,
+        "username": username,
+    }
+
+
+def update_staff_user(staff_id: int, data: StaffUserUpdate, user: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    if data.username is not None:
+        fields["username"] = validate_staff_username(data.username)
+    if data.real_name is not None:
+        real_name = data.real_name.strip()
+        if not real_name:
+            raise HTTPException(status_code=400, detail="请填写工作人员姓名")
+        fields["real_name"] = real_name
+    if data.department is not None:
+        fields["department"] = data.department.strip()
+    if data.role is not None:
+        fields["role"] = validate_staff_role(data.role)
+    if data.status is not None:
+        fields["status"] = validate_staff_status(data.status)
+    if not fields:
+        return {"id": staff_id}
+    with connect() as conn:
+        row = conn.execute("select id,username,role,status from users where id=?", (staff_id,)).fetchone()
+        ensure_row_exists(row, "工作人员登录账号")
+        if row["role"] not in STAFF_ROLES:
+            raise HTTPException(status_code=400, detail="只能维护工作人员登录账号")
+        if "username" in fields and fields["username"] != row["username"]:
+            existing = conn.execute("select id from users where username=? and id<>?", (fields["username"], staff_id)).fetchone()
+            if existing:
+                raise HTTPException(status_code=409, detail="用户名已存在")
+            if int(staff_id) == int(user.get("id") or 0):
+                raise HTTPException(status_code=400, detail="不能修改当前登录账号的用户名")
+        next_role = fields.get("role", row["role"])
+        next_status = fields.get("status", row["status"])
+        if row["role"] == "admin" and row["status"] == "active" and (next_role != "admin" or next_status != "active"):
+            ensure_staff_user_can_be_restricted(conn, row, user)
+        if int(staff_id) == int(user.get("id") or 0) and ("role" in fields or fields.get("status") == "frozen"):
+            raise HTTPException(status_code=400, detail="不能修改当前登录账号的角色或冻结当前账号")
+        assignments = ",".join(f"{key}=?" for key in fields)
+        conn.execute(f"update users set {assignments} where id=?", [*fields.values(), staff_id])
+        updated = conn.execute("select id,username,real_name,role,department,status,created_at from users where id=?", (staff_id,)).fetchone()
+        write_audit(conn, "staff_user_update", "user", f"{user.get('real_name','')}修改工作人员登录账号：{row['username']} -> {fields}", staff_id)
+    return staff_user_row_to_dict(updated)
+
+
+def freeze_staff_user(staff_id: int, user: dict[str, Any]) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute("select id,username,real_name,role,department,status,created_at from users where id=?", (staff_id,)).fetchone()
+        ensure_row_exists(row, "工作人员登录账号")
+        if row["role"] not in STAFF_ROLES:
+            raise HTTPException(status_code=400, detail="只能冻结工作人员登录账号")
+        if row["status"] == "frozen":
+            return staff_user_row_to_dict(row)
+        ensure_staff_user_can_be_restricted(conn, row, user)
+        conn.execute("update users set status='frozen' where id=?", (staff_id,))
+        updated = conn.execute("select id,username,real_name,role,department,status,created_at from users where id=?", (staff_id,)).fetchone()
+        write_audit(conn, "staff_user_freeze", "user", f"{user.get('real_name','')}冻结工作人员登录账号：{row['username']}", staff_id)
+    return staff_user_row_to_dict(updated)
+
+
+def unfreeze_staff_user(staff_id: int, user: dict[str, Any]) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute("select id,username,real_name,role,department,status,created_at from users where id=?", (staff_id,)).fetchone()
+        ensure_row_exists(row, "工作人员登录账号")
+        if row["role"] not in STAFF_ROLES:
+            raise HTTPException(status_code=400, detail="只能解冻工作人员登录账号")
+        if row["status"] == "active":
+            return staff_user_row_to_dict(row)
+        conn.execute("update users set status='active' where id=?", (staff_id,))
+        updated = conn.execute("select id,username,real_name,role,department,status,created_at from users where id=?", (staff_id,)).fetchone()
+        write_audit(conn, "staff_user_unfreeze", "user", f"{user.get('real_name','')}解冻工作人员登录账号：{row['username']}", staff_id)
+    return staff_user_row_to_dict(updated)
+
+
+def reset_staff_user_password(staff_id: int, data: StaffUserPasswordReset, user: dict[str, Any]) -> dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute("select id,username,role from users where id=?", (staff_id,)).fetchone()
+        ensure_row_exists(row, "工作人员登录账号")
+        if row["role"] not in STAFF_ROLES:
+            raise HTTPException(status_code=400, detail="只能重置工作人员登录账号密码")
+        conn.execute("update users set password_hash=? where id=?", (hash_password(data.password), staff_id))
+        write_audit(conn, "staff_user_password_reset", "user", f"{user.get('real_name','')}重置工作人员登录账号密码：{row['username']}", staff_id)
+    return {"id": staff_id, "password_reset": True}
 
 
 def account_expiry_meta(expires_at: str) -> dict[str, Any]:
@@ -127,7 +319,7 @@ def build_accounts_csv(accounts: list[dict[str, Any]]) -> str:
 
 def export_accounts(q: str = "") -> dict[str, Any]:
     accounts = list_accounts(q)
-    audit("account_export", "ops_account", f"导出运维账号 CSV：{len(accounts)} 条，查询条件：{q or '全部'}")
+    audit("account_export", "ops_account", f"导出运维资源账号 CSV：{len(accounts)} 条，查询条件：{q or '全部'}")
     return {
         "content": build_accounts_csv(accounts),
         "count": len(accounts),
@@ -163,7 +355,7 @@ def create_account(data: AccountCreate) -> dict[str, Any]:
             ),
         )
         account_id = int(cur.lastrowid)
-    audit("account_create", "ops_account", f"新增运维账号：{data.account_name}", account_id)
+    audit("account_create", "ops_account", f"新增运维资源账号：{data.account_name}", account_id)
     return {"id": account_id, **data.model_dump(), "status": "active", "created_at": now, "updated_at": now}
 
 
@@ -178,7 +370,7 @@ def create_account_approval_record(
     if action not in {"freeze", "unfreeze", "update"}:
         raise HTTPException(status_code=400, detail="审批动作只能是 freeze、unfreeze 或 update")
     row = conn.execute("select id from ops_accounts where id=?", (account_id,)).fetchone()
-    ensure_row_exists(row, "运维账号")
+    ensure_row_exists(row, "运维资源账号")
     safe_payload = normalize_account_payload(action, payload)
     now = utc_now()
     cur = conn.execute(
@@ -199,23 +391,23 @@ def apply_account_action(conn: Any, approval: dict[str, Any], operator: dict[str
     action = approval["action"]
     payload = json.loads(approval.get("payload_json") or "{}")
     row = conn.execute("select account_name,status from ops_accounts where id=?", (account_id,)).fetchone()
-    ensure_row_exists(row, "运维账号")
+    ensure_row_exists(row, "运维资源账号")
     if action == "freeze":
         if row["status"] == "frozen":
             raise HTTPException(status_code=400, detail="账号已冻结")
         conn.execute("update ops_accounts set status='frozen',updated_at=? where id=?", (now, account_id))
-        write_audit(conn, "account_freeze", "ops_account", f"{operator.get('real_name', '')} 审批后冻结运维账号：{row['account_name']}", account_id)
+        write_audit(conn, "account_freeze", "ops_account", f"{operator.get('real_name', '')} 审批后冻结运维资源账号：{row['account_name']}", account_id)
     elif action == "unfreeze":
         if row["status"] == "active":
             raise HTTPException(status_code=400, detail="账号已是启用状态")
         conn.execute("update ops_accounts set status='active',updated_at=? where id=?", (now, account_id))
-        write_audit(conn, "account_unfreeze", "ops_account", f"{operator.get('real_name', '')} 审批后解冻运维账号：{row['account_name']}", account_id)
+        write_audit(conn, "account_unfreeze", "ops_account", f"{operator.get('real_name', '')} 审批后解冻运维资源账号：{row['account_name']}", account_id)
     elif action == "update":
         fields = normalize_account_payload(action, payload)
         if fields:
             assignments = ",".join(f"{key}=?" for key in fields)
             conn.execute(f"update ops_accounts set {assignments},updated_at=? where id=?", [*fields.values(), now, account_id])
-            write_audit(conn, "account_update", "ops_account", f"{operator.get('real_name', '')} 审批后修改运维账号：{fields}", account_id)
+            write_audit(conn, "account_update", "ops_account", f"{operator.get('real_name', '')} 审批后修改运维资源账号：{fields}", account_id)
     else:
         raise HTTPException(status_code=400, detail="不支持的账号审批动作")
 
@@ -226,27 +418,27 @@ def request_account_update(account_id: int, data: AccountUpdate, user: dict[str,
     if not fields:
         return {"id": account_id}
     with connect() as conn:
-        approval_id = create_account_approval_record(conn, account_id, "update", fields, "申请修改运维账号信息", user)
+        approval_id = create_account_approval_record(conn, account_id, "update", fields, "申请修改运维资源账号信息", user)
     return {"id": account_id, "approval_id": approval_id, "status": "pending_approval"}
 
 
 def request_account_freeze(account_id: int, user: dict[str, Any]) -> dict[str, Any]:
     with connect() as conn:
         row = conn.execute("select status from ops_accounts where id=?", (account_id,)).fetchone()
-        ensure_row_exists(row, "运维账号")
+        ensure_row_exists(row, "运维资源账号")
         if row["status"] == "frozen":
             raise HTTPException(status_code=400, detail="账号已冻结")
-        approval_id = create_account_approval_record(conn, account_id, "freeze", {}, "申请冻结运维账号", user)
+        approval_id = create_account_approval_record(conn, account_id, "freeze", {}, "申请冻结运维资源账号", user)
     return {"id": account_id, "approval_id": approval_id, "status": "pending_approval"}
 
 
 def request_account_unfreeze(account_id: int, user: dict[str, Any]) -> dict[str, Any]:
     with connect() as conn:
         row = conn.execute("select status from ops_accounts where id=?", (account_id,)).fetchone()
-        ensure_row_exists(row, "运维账号")
+        ensure_row_exists(row, "运维资源账号")
         if row["status"] == "active":
             raise HTTPException(status_code=400, detail="账号已是启用状态")
-        approval_id = create_account_approval_record(conn, account_id, "unfreeze", {}, "申请解冻运维账号", user)
+        approval_id = create_account_approval_record(conn, account_id, "unfreeze", {}, "申请解冻运维资源账号", user)
     return {"id": account_id, "approval_id": approval_id, "status": "pending_approval"}
 
 
